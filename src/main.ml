@@ -304,9 +304,12 @@ let treat filename =
                                               model = None}
         | "check-sat", [], Some env ->
           let formula = Term.(andN env.assertions) in
+          print "@[<v 2>@[Computing game@]@,";
           let game = Game.process session.config true ~support:!support ~bound:[] formula in
           print "@[<v 1>@[Computed game is:@]@,@[%a@]@]@," Game.pp game;
-          print "@[Checking environment: %a@]@," Types.pp_smt_status (Context.check env.context);
+          print "@]@,";
+          let _status = Context.check env.context in
+          (* print "@[Checking environment: %a@]@," Types.pp_smt_status status; *)
           let emptymodel = Context.get_model env.context ~keep_subst:true in
           let emptymodel = SModel.{ support = []; model = emptymodel } in
           (* print "@[<v 1>@[emptymodel is:@]%a@]@," SModel.pp emptymodel; *)
@@ -314,7 +317,11 @@ let treat filename =
           let answer = solve game emptymodel in
           print "@]@,";
           print "@[The final answer is %a@]@," pp_answer answer;
-          print "@[Error is: %s@]@,%!" (ErrorPrint.string())
+          Game.free game;
+          print "@[Game freed@]@,";
+        | "exit", [], _ ->
+          print "@[Exiting@]@,";
+          Session.exit session
         | _ -> ParseInstruction.parse session sexp
       end
     | _ -> ParseInstruction.parse session sexp
@@ -334,7 +341,7 @@ match !args with
   (try
      print "@[<v>";
      treat filename;
-     print "@]";
+     print "@]%!";
   with
     ExceptionsErrorHandling.YicesException _ as exc
     -> ErrorPrint.string () |> print_endline; raise exc)
