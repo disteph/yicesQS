@@ -1,0 +1,25 @@
+true: annot, bin_annot
+<**/.svn>: -traverse
+<**/.svn>: not_hygienic
+".bzr": -traverse
+".bzr": not_hygienic
+".hg": -traverse
+".hg": not_hygienic
+".git": -traverse
+".git": not_hygienic
+"_darcs": -traverse
+"_darcs": not_hygienic
+
+true: debug, optimize(3), unbox_closures
+
+<src/*> : package(ctypes),\
+                package(ctypes.foreign),\
+                package(ctypes-zarith),\
+                package(yices2_bindings),\
+                package(sexplib),\
+                package(sexplib0),\
+                package(zarith),\
+                package(containers),\
+                package(ppx_deriving.std),\
+                cclib(-lyices)
+
