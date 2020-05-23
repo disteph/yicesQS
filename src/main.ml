@@ -3,6 +3,10 @@ open Yices2_high
 
 let print fs = Format.(fprintf stdout) fs
 
+let ppl ~prompt pl fmt l = match l with
+  | [] -> ()
+  | _::_ -> Format.fprintf fmt "@,@[<v 2>%s@,%a@]" prompt (List.pp pl) l
+
 module EH1 = Make(ExceptionsErrorHandling)
 open EH1
 
@@ -16,10 +20,12 @@ module HTerm = Hashtbl.Make(Term)
 
 module Game = struct  
   type t = {
+    id : int;
     context : Context.t;   (* A Yices context that tries to satisfy this game *)
     support : Term.t list; (* All uninterpreted constants involved in this game *)
     newvars : Term.t list; (* Subset of the above that were not involved in the parent game *)
     ground  : Term.t;      (* Ground abstraction of the game, as a quantifier-free formula *)
+    learnt  : Term.t list ref; (* ground formulas learnt from the foralls *)
     (* If uninterpreted constant u abstracts away formula (\forall x1...xn A), then *)
     existentials : Term.t list; (* ...ground formula (A{x1\u1...xn\un} => u) goes into that list,
                                    for new uninterpreted constants u1...un *)
@@ -28,19 +34,22 @@ module Game = struct
                                       these games are the children game of the current game *)
   }
 
-  let ppl s pl fmt l = match l with
-    | [] -> ()
-    | _::_ -> Format.fprintf fmt "@,@[<v 2>%s:@ @[%a@]@]" s (List.pp pl) l
-
-  let rec pp fmt {ground; support; existentials; foralls}
-    = Format.fprintf fmt "@[<v>@[Exists %a@]@,@[Ground: %a@]%a%a@]"
+  let rec pp fmt {id; ground; support; learnt; existentials; foralls}
+    = Format.fprintf fmt "@[<v>@[Game id: %i@]@,\
+                          @[Variables: %a@]@,\
+                          @[Ground: %a@]\
+                          %a\
+                          %a\
+                          %a@]"
+      id
       (List.pp Term.pp) support
       Term.pp ground
-      (ppl "Existentials" Term.pp) existentials
-      (ppl "Foralls" pp') foralls
-  and pp' fmt (u,game) =
-    Format.fprintf fmt "@,@[<v 2>%a standing for@,%a@]" Term.pp u pp game
-
+      (ppl ~prompt:"Existentials:" Term.pp) existentials
+      (ppl ~prompt:"Learnt:" Term.pp) !learnt
+      (ppl ~prompt:"Foralls:" pp_forall) foralls
+  and pp_forall fmt (u,game) =
+    Format.fprintf fmt "@[<v 2>%a standing for@,%a@]" Term.pp u pp game
+    
   let rec free {context; foralls} =
     let aux (_,g) = free g in
     List.iter aux foralls;
@@ -114,7 +123,11 @@ module Game = struct
 
   exception CannotTreat of Term.t
 
-  let rec process config ~support ~bound t =
+  let counter = ref 0
+
+  let rec process config player ~support ~bound t =
+    let id = if player then 2*(!counter) else (2*(!counter))+1 in
+    incr counter;
     let tmp =
       let foralls_rev = HTerm.create 10 in
       let rec aux t =
@@ -162,29 +175,34 @@ module Game = struct
   let state = { support; newvars = []; existentials = []; foralls = [] } in
   let ground, { support; newvars; existentials; foralls } = tmp state in
   let treat { uninterpreted; vars; body } =
-    uninterpreted, process config ~support ~bound:vars (Term.not1 body)
+    uninterpreted, process config (not player) ~support ~bound:vars (Term.not1 body)
   in
   let foralls = List.map treat foralls in
   let context = Context.malloc config in
   Context.assert_formula context ground;
   Context.assert_formulas context existentials;
-  { context; support; newvars; ground; existentials; foralls }
+  { id; context; support; newvars; ground; learnt = ref []; existentials; foralls }
 
 end
 
+(* Supported models *)
+module SModel = struct
 
+  type t = {
+    support : Term.t list;
+    model   : Model.t
+  }
 
-type model = {
-  support : Term.t list;
-  model   : Model.t
-}
+  let pp fmt {support;model} =
+    let aux fmt u =
+      let v = Model.get_value_as_term model u in
+      Format.fprintf fmt "@[%a := %a@]" Term.pp u Term.pp v
+    in
+    match support with
+    | [] -> Format.fprintf fmt " []"
+    | _::_ -> Format.fprintf fmt "@,@[<v>%a@]" (List.pp aux) support
 
-let pp_model fmt {support;model} =
-  let aux fmt u =
-    let v = Model.get_value_as_term model u in
-    Format.fprintf fmt "@[%a := %a@]" Term.pp u Term.pp v
-  in
-  List.pp aux fmt support
+end
 
 (* Output for the next function.
    When calling 
@@ -202,21 +220,21 @@ let pp_model fmt {support;model} =
 type answer =
   | Unsat of Term.t
   | Sat of Term.t
-[@@deriving show]
+[@@deriving show { with_path = false }]
 
 let rec solve
     (Game.{ context; support; newvars; ground; existentials; foralls } as game)
     model
   =
-  print "@[<v 3>@[Solving game:@]@,%a@,from model@,%a@]@," Game.pp game pp_model model;
+  print "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
   match Context.check_with_model context model.model model.support with
   |  `STATUS_UNSAT ->
     let answer = Unsat Term.(not1 (Context.get_model_interpolant context)) in
-    print "@[My answer is %a@]" pp_answer answer;
+    print "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
     answer
   |  `STATUS_SAT ->
     let newmodel = Context.get_model context ~keep_subst:true in
-    print "@[<v 1>Model of ground+existentials is:@,%a@]@," pp_model { support; model = newmodel};
+    print "@[<v 1>Found model of ground+existentials+learnt:%a@]@," SModel.pp SModel.{ support; model = newmodel};
     let rec aux reasons = function
       | [] ->
         let true_of_model = ground::(List.rev_append existentials reasons) in
@@ -224,7 +242,7 @@ let rec solve
           Model.generalize_model_list newmodel true_of_model newvars `YICES_GEN_BY_PROJ
         in
         let answer = Sat Term.(andN gen_model) in
-        print "@[My answer is %a@]" pp_answer answer;
+        print "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
         answer
       | (u,_)::opponents when not (Model.get_bool_value newmodel u)
         -> aux reasons opponents
@@ -236,8 +254,9 @@ let rec solve
         | Unsat reason -> aux (reason::reasons) opponents
         | Sat reason ->
           let learnt = Term.(not1 reason) in
-          print "@[Learning %a@]@," Term.pp learnt;
+          (* print "@[Learning %a@]@," Term.pp learnt; *)
           Context.assert_formula context learnt;
+          game.learnt := learnt::!(game.learnt);
           solve game model
     in
     aux [] foralls
@@ -285,16 +304,16 @@ let treat filename =
                                               model = None}
         | "check-sat", [], Some env ->
           let formula = Term.(andN env.assertions) in
-          let game = Game.process session.config ~support:!support ~bound:[] formula in
+          let game = Game.process session.config true ~support:!support ~bound:[] formula in
           print "@[<v 1>@[Computed game is:@]@,@[%a@]@]@," Game.pp game;
           print "@[Checking environment: %a@]@," Types.pp_smt_status (Context.check env.context);
           let emptymodel = Context.get_model env.context ~keep_subst:true in
-          print "@[<v 1>@[emptymodel is:@]@ %s@]@," (PP.model_string emptymodel);
-          print "@[support is: %a@]@,%!" (List.pp Term.pp) game.support;
+          let emptymodel = SModel.{ support = []; model = emptymodel } in
+          (* print "@[<v 1>@[emptymodel is:@]%a@]@," SModel.pp emptymodel; *)
           print "@[<v>";
-          let answer = solve game { support = []; model = emptymodel } in
+          let answer = solve game emptymodel in
           print "@]@,";
-          print "%a@," pp_answer answer;
+          print "@[The final answer is %a@]@," pp_answer answer;
           print "@[Error is: %s@]@,%!" (ErrorPrint.string())
         | _ -> ParseInstruction.parse session sexp
       end
