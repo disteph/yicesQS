@@ -179,6 +179,13 @@ type model = {
   model   : Model.t
 }
 
+let pp_model fmt {support;model} =
+  let aux fmt u =
+    let v = Model.get_value_as_term model u in
+    Format.fprintf fmt "@[%a := %a@]" Term.pp u Term.pp v
+  in
+  List.pp aux fmt support
+
 (* Output for the next function.
    When calling 
      solve game base_support model
@@ -201,7 +208,7 @@ let rec solve
     (Game.{ context; support; newvars; ground; existentials; foralls } as game)
     model
   =
-  print "@[<v 3>@[Solving game:@]@ %a@]@," Game.pp game;
+  print "@[<v 3>@[Solving game:@]@,%a@,from model@,%a@]@," Game.pp game pp_model model;
   match Context.check_with_model context model.model model.support with
   |  `STATUS_UNSAT ->
     let answer = Unsat Term.(not1 (Context.get_model_interpolant context)) in
@@ -209,6 +216,7 @@ let rec solve
     answer
   |  `STATUS_SAT ->
     let newmodel = Context.get_model context ~keep_subst:true in
+    print "@[<v 1>Model of ground+existentials is:@,%a@]@," pp_model { support; model = newmodel};
     let rec aux reasons = function
       | [] ->
         let true_of_model = ground::(List.rev_append existentials reasons) in
@@ -284,9 +292,9 @@ let treat filename =
           print "@[<v 1>@[emptymodel is:@]@ %s@]@," (PP.model_string emptymodel);
           print "@[support is: %a@]@,%!" (List.pp Term.pp) game.support;
           print "@[<v>";
-          let answer = solve game { support = !support; model = emptymodel } in
+          let answer = solve game { support = []; model = emptymodel } in
           print "@]@,";
-          print "@[%a@]@," pp_answer answer;
+          print "%a@," pp_answer answer;
           print "@[Error is: %s@]@,%!" (ErrorPrint.string())
         | _ -> ParseInstruction.parse session sexp
       end
