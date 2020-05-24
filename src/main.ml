@@ -269,7 +269,7 @@ let () = assert(Global.has_mcsat())
 
 let treat filename =
   let sexps = SMT2.load_file filename in
-  let session = Session.create ~verbosity:3 in
+  let session = Session.create ~verbosity:0 in
   let support = ref [] in
   let treat sexp =
     match sexp with
