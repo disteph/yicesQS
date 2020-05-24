@@ -270,24 +270,16 @@ let () = assert(Global.has_mcsat())
 let treat filename =
   let sexps = SMT2.load_file filename in
   let session = Session.create ~verbosity:3 in
-  Config.set session.config ~name:"solver-type" ~value:"mcsat";
-  Config.set session.config ~name:"mode" ~value:"multi-checks";
-  let context = Context.malloc session.config in
-  let param = Param.malloc () in
-  let env = Session.{
-    logic = "QF_BV";
-    context;
-    assertions = [];
-    param;
-    model = None
-  }
-  in
-  session.env := Some env;
   let support = ref [] in
   let treat sexp =
     match sexp with
     | List(Atom head::args) ->
       begin match head, args, !(session.env) with
+        | "set-logic",   [Atom logic],   None ->
+          print "@[Setting logic to %s@]@," logic;
+          Config.set session.config ~name:"solver-type" ~value:"mcsat";
+          Config.set session.config ~name:"mode" ~value:"multi-checks";
+          Session.init_env ~configure:() session ~logic
         | "declare-fun", [Atom var; List []; typ], _
         | "declare-const", [Atom var; typ], _ ->
           let ytype = ParseType.parse session.types typ |> Cont.get in
@@ -343,8 +335,11 @@ match !args with
      treat filename;
      print "@]%!";
   with
-    ExceptionsErrorHandling.YicesException _ as exc
-    -> ErrorPrint.string () |> print_endline; raise exc)
+    ExceptionsErrorHandling.YicesException(_,report) as exc
+    ->
+    print "@[%a@]" pp_error report;
+    raise exc
+ )
 | [] -> failwith "Too few arguments in the command"
 | _ -> failwith "Too many arguments in the command";;
 
