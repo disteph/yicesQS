@@ -1,7 +1,7 @@
 open Containers
 open Yices2_high
 
-let print fs = Format.(fprintf stdout) fs
+open Debug
 
 let ppl ~prompt pl fmt l = match l with
   | [] -> ()
@@ -305,10 +305,11 @@ let treat filename =
           let emptymodel = Context.get_model env.context ~keep_subst:true in
           let emptymodel = SModel.{ support = []; model = emptymodel } in
           (* print "@[<v 1>@[emptymodel is:@]%a@]@," SModel.pp emptymodel; *)
-          print "@[<v>";
+          print "@[<v>%!";
           let answer = solve game emptymodel in
           print "@]@,";
-          print "@[The final answer is %a@]@," pp_answer answer;
+          Format.(fprintf stdout) "@[%s@]@," (match answer with Unsat _ -> "unsat"
+                                                              | Sat _ -> "sat");
           Game.free game;
           print "@[Game freed@]@,";
         | "exit", [], _ ->
@@ -331,13 +332,13 @@ Arg.parse [] (fun a->args := a::!args) description;;
 match !args with
 | [filename] ->
   (try
-     print "@[<v>";
+     Format.(fprintf stdout) "@[<v>";
      treat filename;
-     print "@]%!";
+     Format.(fprintf stdout) "@]%!";
   with
     ExceptionsErrorHandling.YicesException(_,report) as exc
     ->
-    print "@[%a@]" pp_error report;
+    Format.(fprintf stderr) "@[%a@]" pp_error report;
     raise exc
  )
 | [] -> failwith "Too few arguments in the command"

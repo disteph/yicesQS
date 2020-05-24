@@ -20,6 +20,6 @@ true: debug, optimize(3), unbox_closures
                 package(sexplib0),\
                 package(zarith),\
                 package(containers),\
+                package(ppx_optcomp),\
                 package(ppx_deriving.std),\
                 cclib(-lyices)
-
