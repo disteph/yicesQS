@@ -1,19 +1,14 @@
 open Containers
 open Yices2_high
+open Sexplib.Type
+open Yices2_SMT2.Bindings
+open Yices2_SMT2
 
 open Debug
 
 let ppl ~prompt pl fmt l = match l with
   | [] -> ()
   | _::_ -> Format.fprintf fmt "@,@[<v 2>%s@,%a@]" prompt (List.pp pl) l
-
-module EH1 = Make(ExceptionsErrorHandling)
-open EH1
-
-module Term = struct
-  include Term
-  let pp fmt t = t |> PP.term_string |> Format.fprintf fmt "%s"
-end
 
 module HType = Hashtbl.Make(Type)
 module HTerm = Hashtbl.Make(Term)
@@ -126,6 +121,7 @@ module Game = struct
   let counter = ref 0
 
   let rec process config player ~support ~bound t =
+    print "@[Traversing term @[%a@]@]@," Term.pp t;
     let id = if player then 2*(!counter) else (2*(!counter))+1 in
     incr counter;
     let tmp =
@@ -146,20 +142,23 @@ module Game = struct
             let uninterpreted = Term.new_uninterpreted_term (Type.bool()) in
             (* We instantiate the forall formula in 2 ways *)
             (* once instantiating all bound variables by the same uninterpreted term (per type) *)
-            let+ substituted1 = fresh1 vars body in
+            (* let+ substituted1 = fresh1 vars body in *)
             (* once instantiating all bound variables by distinct eigenvariables *)
             let+ substituted  = fresh vars body in
-            (* the former version is used to produce a "lucky" instance of the formula *)
-            let+ lucky_instance = aux substituted1 in
+            (* (\* the former version is used to produce a "lucky" instance of the formula *\)
+             * let+ lucky_instance = aux substituted1 in *)
             (* the latter version is used to produce a "lucky" instance of the formula *)
             let+ existential = aux substituted in
-            let t'           = Term.(uninterpreted &&& lucky_instance) in
+            (* let t'           = Term.(uninterpreted &&& lucky_instance) in *)
+            let t'           = uninterpreted in
             HTerm.add foralls_rev t t';
             fun state ->
               print "@[Abstracting @[%a@], which becomes @[%a@]@]@," Term.pp t Term.pp t';
+              let support      = uninterpreted::state.support in
+              let newvars      = uninterpreted::state.newvars in
               let existentials = Term.(existential ==> uninterpreted)::state.existentials in
               let foralls      = { uninterpreted; vars; body }::state.foralls in
-              t', { state with existentials; foralls }
+              t', { support; newvars; existentials; foralls }
           end
       | Bindings { c = `YICES_LAMBDA_TERM } -> raise(CannotTreat t)
       | A0 _ -> return t
@@ -262,40 +261,49 @@ let rec solve
     aux [] foralls
   | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
-open Yices2_SMT2
-open Sexplib.Type
-
 let () = assert(Global.has_mcsat())
 
 let treat filename =
   let sexps = SMT2.load_file filename in
   let session = Session.create ~verbosity:0 in
   let support = ref [] in
+  let expected = ref None in
   let treat sexp =
     match sexp with
     | List(Atom head::args) ->
+      print "@[Traversing sexp @[%a@]@]@," Sexplib.Sexp.pp sexp;
       begin match head, args, !(session.env) with
+        | "set-info",   [Atom ":status"; Atom "sat"],   _ ->
+          expected := Some true
+
+        | "set-info",   [Atom ":status"; Atom "unsat"],   _ ->
+          expected := Some false
+
         | "set-logic",   [Atom logic],   None ->
           print "@[Setting logic to %s@]@," logic;
           Config.set session.config ~name:"solver-type" ~value:"mcsat";
           Config.set session.config ~name:"mode" ~value:"multi-checks";
           Session.init_env ~configure:() session ~logic
+
         | "declare-fun", [Atom var; List []; typ], _
         | "declare-const", [Atom var; typ], _ ->
           let ytype = ParseType.parse session.types typ |> Cont.get in
           let yvar = Term.new_uninterpreted_term ytype in
           support := yvar :: !support;
+          print "@[<v>declared fun/cst is %a@]@," Term.pp yvar;
           Variables.permanently_add session.variables var yvar
-        | "assert", [formula], Some real_env ->
+
+        | "assert", [formula], Some({assertions = level::tail} as env) ->
           let formula = ParseTerm.parse session formula |> Cont.get in
-          (match real_env.model with
+          (match env.model with
            | Some model -> Model.free model
            | None -> ());
           print "@[Asserting formula @[<1>%a@]@]@," Term.pp formula;
-          session.env := Some { real_env with assertions = formula::real_env.assertions;
-                                              model = None}
+          session.env := Some { env with assertions = (formula::level)::tail;
+                                         model = None}
+
         | "check-sat", [], Some env ->
-          let formula = Term.(andN env.assertions) in
+          let formula = Term.(andN (List.flatten env.assertions)) in
           print "@[<v 2>@[Computing game@]@,";
           let game = Game.process session.config true ~support:!support ~bound:[] formula in
           print "@[<v 1>@[Computed game is:@]@,@[%a@]@]@," Game.pp game;
@@ -305,22 +313,32 @@ let treat filename =
           let emptymodel = Context.get_model env.context ~keep_subst:true in
           let emptymodel = SModel.{ support = []; model = emptymodel } in
           (* print "@[<v 1>@[emptymodel is:@]%a@]@," SModel.pp emptymodel; *)
-          print "@[<v>%!";
+          print "@[<v>";
           let answer = solve game emptymodel in
           print "@]@,";
-          Format.(fprintf stdout) "@[%s@]@," (match answer with Unsat _ -> "unsat"
-                                                              | Sat _ -> "sat");
+          let str = match answer, !expected with
+            | Unsat _, None -> "unsat?"
+            | Sat _, None -> "sat?"
+            | Unsat _, Some true -> "unsat!!!!!!!"
+            | Sat _, Some false -> "sat!!!!!!!"
+            | Unsat _, Some false -> "unsat!"
+            | Sat _, Some true -> "sat!"
+          in
+          Format.(fprintf stdout) "@[%s@]@," str;
           Game.free game;
           print "@[Game freed@]@,";
+
         | "exit", [], _ ->
           print "@[Exiting@]@,";
           Session.exit session
+
         | _ -> ParseInstruction.parse session sexp
+
       end
     | _ -> ParseInstruction.parse session sexp
   in
   List.iter treat sexps;
-  print "@[Exited gracefully@]%!"
+  print "@[Exited gracefully@]@,"
 
 open Arg
 
@@ -338,7 +356,7 @@ match !args with
   with
     ExceptionsErrorHandling.YicesException(_,report) as exc
     ->
-    Format.(fprintf stderr) "@[%a@]" pp_error report;
+    Format.(fprintf stderr) "@[<v>%a@]%!" pp_error report;
     raise exc
  )
 | [] -> failwith "Too few arguments in the command"
