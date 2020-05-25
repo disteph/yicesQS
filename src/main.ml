@@ -8,7 +8,10 @@ open Debug
 
 let ppl ~prompt pl fmt l = match l with
   | [] -> ()
-  | _::_ -> Format.fprintf fmt "@,@[<v 2>%s@,%a@]" prompt (List.pp pl) l
+  | _::_ -> Format.fprintf fmt "@,@[<v 2>%s %i formula(e)@,%a@]"
+              prompt
+              (List.length l)
+              (List.pp pl) l
 
 module HType = Hashtbl.Make(Type)
 module HTerm = Hashtbl.Make(Term)
@@ -31,12 +34,13 @@ module Game = struct
 
   let rec pp fmt {id; ground; support; learnt; existentials; foralls}
     = Format.fprintf fmt "@[<v>@[Game id: %i@]@,\
-                          @[Variables: %a@]@,\
+                          @[Variables %i: %a@]@,\
                           @[Ground: %a@]\
                           %a\
                           %a\
                           %a@]"
       id
+      (List.length support)
       (List.pp Term.pp) support
       Term.pp ground
       (ppl ~prompt:"Existentials:" Term.pp) existentials
@@ -245,14 +249,14 @@ let rec solve
         answer
       | (u,_)::opponents when not (Model.get_bool_value newmodel u)
         -> aux reasons opponents
-      | (_,opponent)::opponents ->
+      | (u,opponent)::opponents ->
         print "@[<v 1> ";
         let recurs = solve opponent { support; model = newmodel} in
         print "@]@,";
         match recurs with
         | Unsat reason -> aux (reason::reasons) opponents
         | Sat reason ->
-          let learnt = Term.(not1 reason) in
+          let learnt = Term.(u ==> not1 reason) in
           (* print "@[Learning %a@]@," Term.pp learnt; *)
           Context.assert_formula context learnt;
           game.learnt := learnt::!(game.learnt);
