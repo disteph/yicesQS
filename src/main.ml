@@ -1,8 +1,8 @@
 open Containers
 open Yices2_high
 open Sexplib.Type
-open Yices2_SMT2.Bindings
 open Yices2_SMT2
+open Bindings
 
 open Debug
 
@@ -94,10 +94,18 @@ module Game = struct
     let newvars = newvar::state.newvars in
     a, { state with support; newvars }
 
+  let bound_counter = ref 0
+
+  let fresh_bound () =
+    let name = "y!"^string_of_int !bound_counter in
+    incr bound_counter;
+    name
+
   let fresh vars body =
     let aux subst v =
       let typ = Term.type_of_term v in
-      let newvar = Term.new_uninterpreted_term typ in
+      let name = fresh_bound() in
+      let newvar = Term.new_uninterpreted ~name typ in
       var_add newvar ((v,newvar)::subst)
     in
     let+ subst = MList.fold aux (return []) vars in
@@ -111,7 +119,8 @@ module Game = struct
       then return ((v, HType.find h typ)::subst)
       else
         begin
-          let newvar = Term.new_uninterpreted_term typ in
+          let name = fresh_bound() in
+          let newvar = Term.new_uninterpreted ~name typ in
           HType.add h typ newvar;
           var_add newvar ((v,newvar)::subst)
         end
@@ -123,6 +132,13 @@ module Game = struct
   exception CannotTreat of Term.t
 
   let counter = ref 0
+
+  let fa_counter = ref 0
+
+  let fresh_placeholder () =
+    let name = "forall_placeholder"^string_of_int !fa_counter in
+    incr fa_counter;
+    name
 
   let rec process config player ~support ~bound t =
     print "@[Traversing term @[%a@]@]@," Term.pp t;
@@ -142,49 +158,48 @@ module Game = struct
             return(HTerm.find foralls_rev t)
           else
             begin
-            (* We create a name for the forall formula *)
-            let uninterpreted = Term.new_uninterpreted_term (Type.bool()) in
-            (* We instantiate the forall formula in 2 ways *)
-            (* once instantiating all bound variables by the same uninterpreted term (per type) *)
-            (* let+ substituted1 = fresh1 vars body in *)
-            (* once instantiating all bound variables by distinct eigenvariables *)
-            let+ substituted  = fresh vars body in
-            (* (\* the former version is used to produce a "lucky" instance of the formula *\)
-             * let+ lucky_instance = aux substituted1 in *)
-            (* the latter version is used to produce a "lucky" instance of the formula *)
-            let+ existential = aux substituted in
-            (* let t'           = Term.(uninterpreted &&& lucky_instance) in *)
-            let t'           = uninterpreted in
-            HTerm.add foralls_rev t t';
-            fun state ->
-              print "@[Abstracting @[%a@], which becomes @[%a@]@]@," Term.pp t Term.pp t';
-              let support      = uninterpreted::state.support in
-              let newvars      = uninterpreted::state.newvars in
-              let existentials = Term.(existential ==> uninterpreted)::state.existentials in
-              let foralls      = { uninterpreted; vars; body }::state.foralls in
-              t', { support; newvars; existentials; foralls }
-          end
-      | Bindings { c = `YICES_LAMBDA_TERM } -> raise(CannotTreat t)
-      | A0 _ -> return t
-      | _ ->
-        (* let aa = PP.term_string t in
-         * print_endline aa; *)
-        let+ x = map aux a in return(Term.build x)
+              (* We create a name for the forall formula *)
+              let name = fresh_placeholder() in
+              let uninterpreted = Term.new_uninterpreted ~name (Type.bool()) in
+              (* We instantiate the forall formula in 2 ways *)
+              (* once instantiating all bound variables by the same uninterpreted term (per type) *)
+              (* let+ substituted1 = fresh1 vars body in *)
+              (* once instantiating all bound variables by distinct eigenvariables *)
+              let+ substituted  = fresh vars body in
+              (* (\* the former version is used to produce a "lucky" instance of the formula *\)
+               * let+ lucky_instance = aux substituted1 in *)
+              (* the latter version is used to produce a "lucky" instance of the formula *)
+              let+ existential = aux substituted in
+              (* let t'           = Term.(uninterpreted &&& lucky_instance) in *)
+              let t'           = uninterpreted in
+              HTerm.add foralls_rev t t';
+              fun state ->
+                print "@[Abstracting @[%a@], which becomes @[%a@]@]@," Term.pp t Term.pp t';
+                let support      = uninterpreted::state.support in
+                let newvars      = uninterpreted::state.newvars in
+                let existentials = Term.(existential ==> uninterpreted)::state.existentials in
+                let foralls      = { uninterpreted; vars; body }::state.foralls in
+                t', { support; newvars; existentials; foralls }
+            end
+        | Bindings { c = `YICES_LAMBDA_TERM } -> raise(CannotTreat t)
+        | A0 _ -> return t
+        | _ ->
+          let+ x = map aux a in return(Term.build x)
+      in
+      (* creating meta-variables for the bound variables we are given *)
+      let+ t = fresh bound t in
+      aux t
     in
-    (* creating meta-variables for the bound variables we are given *)
-    let+ t = fresh bound t in
-    aux t
-  in
-  let state = { support; newvars = []; existentials = []; foralls = [] } in
-  let ground, { support; newvars; existentials; foralls } = tmp state in
-  let treat { uninterpreted; vars; body } =
-    uninterpreted, process config (not player) ~support ~bound:vars (Term.not1 body)
-  in
-  let foralls = List.map treat foralls in
-  let context = Context.malloc config in
-  Context.assert_formula context ground;
-  Context.assert_formulas context existentials;
-  { id; context; support; newvars; ground; learnt = ref []; existentials; foralls }
+    let state = { support; newvars = []; existentials = []; foralls = [] } in
+    let ground, { support; newvars; existentials; foralls } = tmp state in
+    let treat { uninterpreted; vars; body } =
+      uninterpreted, process config (not player) ~support ~bound:vars (Term.not1 body)
+    in
+    let foralls = List.map treat foralls in
+    let context = Context.malloc ~config () in
+    Context.assert_formula context ground;
+    Context.assert_formulas context existentials;
+    { id; context; support; newvars; ground; learnt = ref []; existentials; foralls }
 
 end
 
@@ -230,6 +245,8 @@ let rec solve
     model
   =
   print "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
+  print "@[<v 3>@[Internal assertions:@]@,%a@]@," Context.pp context;
+  print "@[<v 3>@[Model internal pp:@]@,%s@]@," (PP.model_string ~display:Types.{width=100;height=100;offset=0} model.model);
   match Context.check_with_model context model.model model.support with
   |  `STATUS_UNSAT ->
     let answer = Unsat Term.(not1 (Context.get_model_interpolant context)) in
@@ -237,6 +254,10 @@ let rec solve
     answer
   |  `STATUS_SAT ->
     let newmodel = Context.get_model context ~keep_subst:true in
+    print "@[<v 1>Found model of ground+existentials+learnt:%s@]@," (PP.model_string ~display:Types.{width=80; height=80; offset= 2} newmodel);
+
+    let defined = Model.collect_defined_terms newmodel in
+    print "@[<v 1>Defined terms (%i):%a@]@," (List.length defined) (List.pp Term.pp) defined;    
     print "@[<v 1>Found model of ground+existentials+learnt:%a@]@," SModel.pp SModel.{ support; model = newmodel};
     let rec aux reasons = function
       | [] ->
@@ -244,6 +265,7 @@ let rec solve
         let gen_model =
           Model.generalize_model_list newmodel true_of_model newvars `YICES_GEN_BY_PROJ
         in
+        print "@[Generalized model give with %i terms@]@," (List.length gen_model);
         let answer = Sat Term.(andN gen_model) in
         print "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
         answer
@@ -272,6 +294,7 @@ let treat filename =
   let session = Session.create ~verbosity:0 in
   let support = ref [] in
   let expected = ref None in
+  let assertions = ref [] in
   let treat sexp =
     match sexp with
     | List(Atom head::args) ->
@@ -289,25 +312,24 @@ let treat filename =
           Config.set session.config ~name:"mode" ~value:"multi-checks";
           Session.init_env ~configure:() session ~logic
 
-        | "declare-fun", [Atom var; List []; typ], _
-        | "declare-const", [Atom var; typ], _ ->
+        | "declare-fun", [Atom name; List []; typ], _
+        | "declare-const", [Atom name; typ], _ ->
           let ytype = ParseType.parse session.types typ |> Cont.get in
-          let yvar = Term.new_uninterpreted_term ytype in
+          let yvar = Term.new_uninterpreted ~name ytype in
           support := yvar :: !support;
           print "@[<v>declared fun/cst is %a@]@," Term.pp yvar;
-          Variables.permanently_add session.variables var yvar
+          Variables.permanently_add session.variables name yvar
 
-        | "assert", [formula], Some({assertions = level::tail} as env) ->
+        | "assert", [formula], Some env ->
           let formula = ParseTerm.parse session formula |> Cont.get in
           (match env.model with
            | Some model -> Model.free model
            | None -> ());
           print "@[Asserting formula @[<1>%a@]@]@," Term.pp formula;
-          session.env := Some { env with assertions = (formula::level)::tail;
-                                         model = None}
+          assertions := formula::!assertions
 
         | "check-sat", [], Some env ->
-          let formula = Term.(andN (List.flatten env.assertions)) in
+          let formula = Term.(andN !assertions) in
           print "@[<v 2>@[Computing game@]@,";
           let game = Game.process session.config true ~support:!support ~bound:[] formula in
           print "@[<v 1>@[Computed game is:@]@,@[%a@]@]@," Game.pp game;
@@ -360,7 +382,7 @@ match !args with
   with
     ExceptionsErrorHandling.YicesException(_,report) as exc
     ->
-    Format.(fprintf stderr) "@[<v>%a@]%!" pp_error report;
+    Format.(fprintf stderr) "@[<v>%a@]%!" Types.pp_error_report report;
     raise exc
  )
 | [] -> failwith "Too few arguments in the command"
