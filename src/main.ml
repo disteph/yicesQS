@@ -6,6 +6,11 @@ open Bindings
 
 open Debug
 
+
+let verbosity = ref 0
+
+let print i fs = Format.((if !verbosity >= i then fprintf else ifprintf) stdout) fs
+
 let ppl ~prompt pl fmt l = match l with
   | [] -> ()
   | _::_ -> Format.fprintf fmt "@,@[<v 2>%s %i formula(e)@,%a@]"
@@ -54,6 +59,18 @@ module Game = struct
     List.iter aux foralls;
     Context.free context
 
+  let rec search_sub_game i game = 
+    if game.id = i then Some game
+    else
+      let rec aux = function
+        | [] -> None
+        | (_,sgame)::tail ->
+          match search_sub_game i sgame with
+          | Some _ as x -> x
+          | None -> aux tail
+      in
+      aux game.foralls
+  
   (* The following datastructure is used to record
      that uninterpreted constant u abstracts away formula (\forall x1...xn A):
      { uninterpreted = u; vars = x1...xn; body = A } *)
@@ -141,7 +158,7 @@ module Game = struct
     name
 
   let rec process config player ~support ~bound t =
-    print "@[Traversing term @[%a@]@]@," Term.pp t;
+    print 5 "@[Traversing term @[%a@]@]@," Term.pp t;
     let id = if player then 2*(!counter) else (2*(!counter))+1 in
     incr counter;
     let tmp =
@@ -174,7 +191,7 @@ module Game = struct
               let t'           = uninterpreted in
               HTerm.add foralls_rev t t';
               fun state ->
-                print "@[Abstracting @[%a@], which becomes @[%a@]@]@," Term.pp t Term.pp t';
+                print 4 "@[Abstracting @[%a@], which becomes @[%a@]@]@," Term.pp t Term.pp t';
                 let support      = uninterpreted::state.support in
                 let newvars      = uninterpreted::state.newvars in
                 let existentials = Term.(existential ==> uninterpreted)::state.existentials in
@@ -244,37 +261,30 @@ let rec solve
     (Game.{ context; support; newvars; ground; existentials; foralls } as game)
     model
   =
-  print "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
-  print "@[<v 3>@[Internal assertions:@]@,%a@]@," Context.pp context;
-  print "@[<v 3>@[Model internal pp:@]@,%s@]@," (PP.model_string ~display:Types.{width=100;height=100;offset=0} model.model);
+  print 3 "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
   match Context.check_with_model context model.model model.support with
   |  `STATUS_UNSAT ->
     let answer = Unsat Term.(not1 (Context.get_model_interpolant context)) in
-    print "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
+    print 3 "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
     answer
   |  `STATUS_SAT ->
     let newmodel = Context.get_model context ~keep_subst:true in
-    print "@[<v 1>Found model of ground+existentials+learnt:%s@]@," (PP.model_string ~display:Types.{width=80; height=80; offset= 2} newmodel);
-
-    let defined = Model.collect_defined_terms newmodel in
-    print "@[<v 1>Defined terms (%i):%a@]@," (List.length defined) (List.pp Term.pp) defined;    
-    print "@[<v 1>Found model of ground+existentials+learnt:%a@]@," SModel.pp SModel.{ support; model = newmodel};
+    print 4 "@[<v 1>Found model of ground+existentials+learnt:%a@]@," SModel.pp SModel.{ support; model = newmodel};
     let rec aux reasons = function
       | [] ->
         let true_of_model = ground::(List.rev_append existentials reasons) in
         let gen_model =
           Model.generalize_model_list newmodel true_of_model newvars `YICES_GEN_BY_PROJ
         in
-        print "@[Generalized model give with %i terms@]@," (List.length gen_model);
         let answer = Sat Term.(andN gen_model) in
-        print "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
+        print 3 "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
         answer
       | (u,_)::opponents when not (Model.get_bool_value newmodel u)
         -> aux reasons opponents
       | (u,opponent)::opponents ->
-        print "@[<v 1> ";
+        print 1 "@[<v 1> ";
         let recurs = solve opponent { support; model = newmodel} in
-        print "@]@,";
+        print 1 "@]@,";
         match recurs with
         | Unsat reason -> aux (reason::reasons) opponents
         | Sat reason ->
@@ -298,7 +308,7 @@ let treat filename =
   let treat sexp =
     match sexp with
     | List(Atom head::args) ->
-      print "@[Traversing sexp @[%a@]@]@," Sexplib.Sexp.pp sexp;
+      print 1 "@[Traversing sexp @[%a@]@]@," Sexplib.Sexp.pp sexp;
       begin match head, args, !(session.env) with
         | "set-info",   [Atom ":status"; Atom "sat"],   _ ->
           expected := Some true
@@ -307,7 +317,7 @@ let treat filename =
           expected := Some false
 
         | "set-logic",   [Atom logic],   None ->
-          print "@[Setting logic to %s@]@," logic;
+          print 3 "@[Setting logic to %s@]@," logic;
           Config.set session.config ~name:"solver-type" ~value:"mcsat";
           Config.set session.config ~name:"mode" ~value:"multi-checks";
           Session.init_env ~configure:() session ~logic
@@ -317,31 +327,29 @@ let treat filename =
           let ytype = ParseType.parse session.types typ |> Cont.get in
           let yvar = Term.new_uninterpreted ~name ytype in
           support := yvar :: !support;
-          print "@[<v>declared fun/cst is %a@]@," Term.pp yvar;
+          print 2 "@[<v>declared fun/cst is %a@]@," Term.pp yvar;
           Variables.permanently_add session.variables name yvar
 
         | "assert", [formula], Some env ->
           let formula = ParseTerm.parse session formula |> Cont.get in
+          print 2 "@[Asserting formula @[<1>%a@]@]@," Term.pp formula;
           (match env.model with
            | Some model -> Model.free model
            | None -> ());
-          print "@[Asserting formula @[<1>%a@]@]@," Term.pp formula;
           assertions := formula::!assertions
 
         | "check-sat", [], Some env ->
           let formula = Term.(andN !assertions) in
-          print "@[<v 2>@[Computing game@]@,";
+          print 2 "@[<v 2>@[Computing game@]@,";
           let game = Game.process session.config true ~support:!support ~bound:[] formula in
-          print "@[<v 1>@[Computed game is:@]@,@[%a@]@]@," Game.pp game;
-          print "@]@,";
+          print 3 "@[<v 1>@[Computed game is:@]@,@[%a@]@]@," Game.pp game;
+          print 2 "@]@,";
           let _status = Context.check env.context in
-          (* print "@[Checking environment: %a@]@," Types.pp_smt_status status; *)
           let emptymodel = Context.get_model env.context ~keep_subst:true in
           let emptymodel = SModel.{ support = []; model = emptymodel } in
-          (* print "@[<v 1>@[emptymodel is:@]%a@]@," SModel.pp emptymodel; *)
-          print "@[<v>";
+          print 1 "@[<v>";
           let answer = solve game emptymodel in
-          print "@]@,";
+          print 1 "@]@,";
           let str = match answer, !expected with
             | Unsat _, None -> "unsat?"
             | Sat _, None -> "sat?"
@@ -352,10 +360,9 @@ let treat filename =
           in
           Format.(fprintf stdout) "@[%s@]@," str;
           Game.free game;
-          print "@[Game freed@]@,";
-
+          print 3 "@[Game freed@]@,";
         | "exit", [], _ ->
-          print "@[Exiting@]@,";
+          print 1 "@[Exiting@]@,";
           Session.exit session
 
         | _ -> ParseInstruction.parse session sexp
@@ -364,14 +371,18 @@ let treat filename =
     | _ -> ParseInstruction.parse session sexp
   in
   List.iter treat sexps;
-  print "@[Exited gracefully@]@,"
+  print 1 "@[Exited gracefully@]@,"
 
 open Arg
 
 let args = ref []
-let description = "QE in Yices";;
+let description = "QE in Yices"
 
-Arg.parse [] (fun a->args := a::!args) description;;
+let options = [
+  ("-verb", Int(fun i -> verbosity := i), "Verbosity level (default is 0)");
+];;
+
+Arg.parse options (fun a->args := a::!args) description;;
 
 match !args with
 | [filename] ->
