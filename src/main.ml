@@ -1,6 +1,7 @@
 open Containers
 open Yices2_high
-open Sexplib.Type
+open Sexplib
+open Type
 open Yices2_SMT2
 open Bindings
 
@@ -257,6 +258,8 @@ type answer =
   | Sat of Term.t
 [@@deriving show { with_path = false }]
 
+exception SolveException of Game.t * Term.t
+  
 let rec solve
     (Game.{ context; support; newvars; ground; existentials; foralls } as game)
     model
@@ -264,7 +267,10 @@ let rec solve
   print 3 "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
   match Context.check_with_model context model.model model.support with
   |  `STATUS_UNSAT ->
-    let answer = Unsat Term.(not1 (Context.get_model_interpolant context)) in
+    let interpolant = Context.get_model_interpolant context in
+    if (Model.get_bool_value model.model interpolant)
+    then raise (SolveException(game, interpolant));
+    let answer = Unsat Term.(not1 interpolant) in
     print 3 "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
     answer
   |  `STATUS_SAT ->
@@ -273,6 +279,7 @@ let rec solve
     let rec aux reasons = function
       | [] ->
         let true_of_model = ground::(List.rev_append existentials reasons) in
+        print 0 "@[true of model is @[<v>   %a@]@]" (List.pp Term.pp) true_of_model;
         let gen_model =
           Model.generalize_model_list newmodel true_of_model newvars `YICES_GEN_BY_PROJ
         in
@@ -342,7 +349,7 @@ let treat filename =
           let formula = Term.(andN !assertions) in
           print 2 "@[<v 2>@[Computing game@]@,";
           let game = Game.process session.config true ~support:!support ~bound:[] formula in
-          print 3 "@[<v 1>@[Computed game is:@]@,@[%a@]@]@," Game.pp game;
+          print 3 "@[<v 1>@[Computed game is:@]@,@[%a@]@]@,%!" Game.pp game;
           print 2 "@]@,";
           let _status = Context.check env.context in
           let emptymodel = Context.get_model env.context ~keep_subst:true in
@@ -361,6 +368,7 @@ let treat filename =
           Format.(fprintf stdout) "@[%s@]@," str;
           Game.free game;
           print 3 "@[Game freed@]@,";
+
         | "exit", [], _ ->
           print 1 "@[Exiting@]@,";
           Session.exit session
@@ -390,10 +398,22 @@ match !args with
      Format.(fprintf stdout) "@[<v>";
      treat filename;
      Format.(fprintf stdout) "@]%!";
-  with
-    ExceptionsErrorHandling.YicesException(_,report) as exc
+   with
+   | SolveException(game, interpolant) ->
+     let intro t =
+       let typ = Term.type_of_term t in
+       List[Atom "declare-fun"; Term.to_sexp t; List[]; Type.to_sexp typ]
+     in
+     let bindings = List.map intro game.support in
+     let l = List.rev !(game.context.log) in
+     let l = List.fold_left Context.to_sexp bindings l in 
+     Format.(fprintf stdout) "@[<v>%a@,@,interpolant:@,%a@]%!"
+       Sexp.pp (List(List.rev l))
+       Sexp.pp (Term.to_sexp interpolant);
+     
+   | ExceptionsErrorHandling.YicesException(_,report) as exc
     ->
-    Format.(fprintf stderr) "@[<v>%a@]%!" Types.pp_error_report report;
+    Format.(fprintf stdout) "@[<v>%a@]%!" Types.pp_error_report report;
     raise exc
  )
 | [] -> failwith "Too few arguments in the command"
