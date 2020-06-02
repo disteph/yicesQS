@@ -1,12 +1,9 @@
 open Containers
-open Yices2_high
 open Sexplib
 open Type
+open Yices2_high
+open Yices2_ext_bindings
 open Yices2_SMT2
-open Bindings
-
-open Debug
-
 
 let verbosity = ref 0
 
@@ -279,7 +276,7 @@ let rec solve
     let rec aux reasons = function
       | [] ->
         let true_of_model = ground::(List.rev_append existentials reasons) in
-        print 0 "@[true of model is @[<v>   %a@]@]" (List.pp Term.pp) true_of_model;
+        print 4 "@[true of model is @[<v>   %a@]@]" (List.pp Term.pp) true_of_model;
         let gen_model =
           Model.generalize_model_list newmodel true_of_model newvars `YICES_GEN_BY_PROJ
         in
@@ -308,7 +305,12 @@ let () = assert(Global.has_mcsat())
 
 let treat filename =
   let sexps = SMT2.load_file filename in
-  let session = Session.create ~verbosity:0 in
+  let set_logic logic config =
+    print 3 "@[Setting logic to %s@]@," logic;
+    Config.set config ~name:"solver-type" ~value:"mcsat";
+    Config.set config ~name:"mode" ~value:"multi-checks"
+  in
+  let session = Session.create ~set_logic 0 in
   let support = ref [] in
   let expected = ref None in
   let assertions = ref [] in
@@ -323,22 +325,16 @@ let treat filename =
         | "set-info",   [Atom ":status"; Atom "unsat"],   _ ->
           expected := Some false
 
-        | "set-logic",   [Atom logic],   None ->
-          print 3 "@[Setting logic to %s@]@," logic;
-          Config.set session.config ~name:"solver-type" ~value:"mcsat";
-          Config.set session.config ~name:"mode" ~value:"multi-checks";
-          Session.init_env ~configure:() session ~logic
-
-        | "declare-fun", [Atom name; List []; typ], _
-        | "declare-const", [Atom name; typ], _ ->
-          let ytype = ParseType.parse session.types typ |> Cont.get in
+        | "declare-fun", [Atom name; List []; typ], Some env
+        | "declare-const", [Atom name; typ], Some env ->
+          let ytype = ParseType.parse env.types typ |> Cont.get in
           let yvar = Term.new_uninterpreted ~name ytype in
           support := yvar :: !support;
           print 2 "@[<v>declared fun/cst is %a@]@," Term.pp yvar;
-          Variables.permanently_add session.variables name yvar
+          Variables.permanently_add env.variables name yvar
 
         | "assert", [formula], Some env ->
-          let formula = ParseTerm.parse session formula |> Cont.get in
+          let formula = ParseTerm.parse env formula |> Cont.get in
           print 2 "@[Asserting formula @[<1>%a@]@]@," Term.pp formula;
           (match env.model with
            | Some model -> Model.free model
@@ -405,8 +401,7 @@ match !args with
        List[Atom "declare-fun"; Term.to_sexp t; List[]; Type.to_sexp typ]
      in
      let bindings = List.map intro game.support in
-     let l = List.rev !(game.context.log) in
-     let l = List.fold_left Context.to_sexp bindings l in 
+     let l = Context.to_sexp bindings game.context in 
      Format.(fprintf stdout) "@[<v>%a@,@,interpolant:@,%a@]%!"
        Sexp.pp (List(List.rev l))
        Sexp.pp (Term.to_sexp interpolant);
