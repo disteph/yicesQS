@@ -311,9 +311,9 @@ let treat filename =
     Config.set config ~name:"mode" ~value:"multi-checks"
   in
   let session = Session.create ~set_logic 0 in
-  let support = ref [] in
-  let expected = ref None in
-  let assertions = ref [] in
+  let support       = ref [] in
+  let expected      = ref None in
+  let assertions    = ref [] in
   let treat sexp =
     match sexp with
     | List(Atom head::args) ->
@@ -396,15 +396,25 @@ match !args with
      Format.(fprintf stdout) "@]%!";
    with
    | SolveException(game, interpolant) ->
-     let intro t =
+
+     let log = Context.to_sexp game.context in
+     let intro sofar t =
        let typ = Term.type_of_term t in
-       List[Atom "declare-fun"; Term.to_sexp t; List[]; Type.to_sexp typ]
+       let sexp = List[Atom "declare-fun"; Term.to_sexp t; List[]; Type.to_sexp typ] in
+       sexp::sofar
      in
-     let bindings = List.map intro game.support in
-     let l = Context.to_sexp bindings game.context in 
-     Format.(fprintf stdout) "@[<v>%a@,@,interpolant:@,%a@]%!"
-       Sexp.pp (List(List.rev l))
-       Sexp.pp (Term.to_sexp interpolant);
+     let log = List.fold_left intro log game.support in
+     let sl = List[Atom "set-logic"; Atom "QF_BV"] in
+     let pp fmt sexplist =
+       Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" pp_sexp) sexplist
+     in
+     Format.(fprintf stdout) "@[<v2>  %a@]@,%!" pp (sl::log)
+
+     (* let bindings = List.map intro game.support in
+      * let l = Context.to_sexp bindings game.context in 
+      * Format.(fprintf stdout) "@[<v>%a@,@,interpolant:@,%a@]%!"
+      *   Sexp.pp (List(List.rev l))
+      *   Sexp.pp (Term.to_sexp interpolant); *)
      
    | ExceptionsErrorHandling.YicesException(_,report) as exc
     ->
