@@ -16,6 +16,8 @@ let ppl ~prompt pl fmt l = match l with
               (List.length l)
               (List.pp pl) l
 
+let pp_term fmt t = t |> Term.to_sexp |> pp_sexp fmt
+
 module HType = Hashtbl.Make(Type)
 module HTerm = Hashtbl.Make(Term)
 
@@ -44,14 +46,25 @@ module Game = struct
                           %a@]"
       id
       (List.length support)
-      (List.pp Term.pp) support
-      Term.pp ground
-      (ppl ~prompt:"Existentials:" Term.pp) existentials
-      (ppl ~prompt:"Learnt:" Term.pp) !learnt
+      (List.pp pp_term) support
+      pp_term ground
+      (ppl ~prompt:"Existentials:" pp_term) existentials
+      (ppl ~prompt:"Learnt:" pp_term) !learnt
       (ppl ~prompt:"Foralls:" pp_forall) foralls
   and pp_forall fmt (u,game) =
-    Format.fprintf fmt "@[<v 2>%a standing for@,%a@]" Term.pp u pp game
-    
+    Format.fprintf fmt "@[<v 2>%a standing for@,%a@]" pp_term u pp game
+
+  let pp_log fmt game =
+    let log = Context.to_sexp game.context in
+    let intro sofar t =
+      let typ = Term.type_of_term t in
+      let sexp = List[Atom "declare-fun"; Term.to_sexp t; List[]; Type.to_sexp typ] in
+      sexp::sofar
+    in
+    let log = List.fold_left intro log game.support in
+    let sl = List[Atom "set-logic"; Atom "QF_BV"] in
+    Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" pp_sexp) (sl::log)
+  
   let rec free {context; foralls} =
     let aux (_,g) = free g in
     List.iter aux foralls;
@@ -156,7 +169,7 @@ module Game = struct
     name
 
   let rec process config player ~support ~bound t =
-    print 5 "@[Traversing term @[%a@]@]@," Term.pp t;
+    print 5 "@[Traversing term @[%a@]@]@," pp_term t;
     let id = if player then 2*(!counter) else (2*(!counter))+1 in
     incr counter;
     let tmp =
@@ -189,7 +202,7 @@ module Game = struct
               let t'           = uninterpreted in
               HTerm.add foralls_rev t t';
               fun state ->
-                print 4 "@[Abstracting @[%a@], which becomes @[%a@]@]@," Term.pp t Term.pp t';
+                print 4 "@[Abstracting @[%a@], which becomes @[%a@]@]@," pp_term t pp_term t';
                 let support      = uninterpreted::state.support in
                 let newvars      = uninterpreted::state.newvars in
                 let existentials = Term.(existential ==> uninterpreted)::state.existentials in
@@ -229,7 +242,7 @@ module SModel = struct
   let pp fmt {support;model} =
     let aux fmt u =
       let v = Model.get_value_as_term model u in
-      Format.fprintf fmt "@[%a := %a@]" Term.pp u Term.pp v
+      Format.fprintf fmt "@[%a := %a@]" pp_term u pp_term v
     in
     match support with
     | [] -> Format.fprintf fmt " []"
@@ -256,6 +269,7 @@ type answer =
 [@@deriving show { with_path = false }]
 
 exception SolveException of Game.t * Term.t
+exception FromYicesException of Game.t * Types.error_report
   
 let rec solve
     (Game.{ context; support; newvars; ground; existentials; foralls } as game)
@@ -264,19 +278,23 @@ let rec solve
   print 3 "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
   match Context.check_with_model context model.model model.support with
   |  `STATUS_UNSAT ->
-    let interpolant = Context.get_model_interpolant context in
-    if (Model.get_bool_value model.model interpolant)
-    then raise (SolveException(game, interpolant));
-    let answer = Unsat Term.(not1 interpolant) in
-    print 3 "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
-    answer
+    (try
+        let interpolant = Context.get_model_interpolant context in
+        if (Model.get_bool_value model.model interpolant)
+        then raise (SolveException(game, interpolant));
+        let answer = Unsat Term.(not1 interpolant) in
+        print 3 "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
+        answer
+      with
+        ExceptionsErrorHandling.YicesException(_,report) ->
+        raise (FromYicesException(game,report)))
   |  `STATUS_SAT ->
     let newmodel = Context.get_model context ~keep_subst:true in
     print 4 "@[<v 1>Found model of ground+existentials+learnt:%a@]@," SModel.pp SModel.{ support; model = newmodel};
     let rec aux reasons = function
       | [] ->
         let true_of_model = ground::(List.rev_append existentials reasons) in
-        print 4 "@[true of model is @[<v>   %a@]@]" (List.pp Term.pp) true_of_model;
+        print 4 "@[true of model is @[<v>   %a@]@]" (List.pp pp_term) true_of_model;
         let gen_model =
           Model.generalize_model_list newmodel true_of_model newvars `YICES_GEN_BY_PROJ
         in
@@ -293,7 +311,7 @@ let rec solve
         | Unsat reason -> aux (reason::reasons) opponents
         | Sat reason ->
           let learnt = Term.(u ==> not1 reason) in
-          (* print "@[Learning %a@]@," Term.pp learnt; *)
+          (* print "@[Learning %a@]@," pp_term learnt; *)
           Context.assert_formula context learnt;
           game.learnt := learnt::!(game.learnt);
           solve game model
@@ -330,12 +348,12 @@ let treat filename =
           let ytype = ParseType.parse env.types typ |> Cont.get in
           let yvar = Term.new_uninterpreted ~name ytype in
           support := yvar :: !support;
-          print 2 "@[<v>declared fun/cst is %a@]@," Term.pp yvar;
+          print 2 "@[<v>declared fun/cst is %a@]@," pp_term yvar;
           Variables.permanently_add env.variables name yvar
 
         | "assert", [formula], Some env ->
           let formula = ParseTerm.parse env formula |> Cont.get in
-          print 2 "@[Asserting formula @[<1>%a@]@]@," Term.pp formula;
+          print 2 "@[Asserting formula @[<1>%a@]@]@," pp_term formula;
           (match env.model with
            | Some model -> Model.free model
            | None -> ());
@@ -396,29 +414,19 @@ match !args with
      Format.(fprintf stdout) "@]%!";
    with
    | SolveException(game, interpolant) as exc ->
-
-     let log = Context.to_sexp game.context in
-     let intro sofar t =
-       let typ = Term.type_of_term t in
-       let sexp = List[Atom "declare-fun"; Term.to_sexp t; List[]; Type.to_sexp typ] in
-       sexp::sofar
-     in
-     let log = List.fold_left intro log game.support in
-     let sl = List[Atom "set-logic"; Atom "QF_BV"] in
-     let pp fmt sexplist =
-       Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" pp_sexp) sexplist
-     in
      Format.(fprintf stdout) "@[<v2>  %a@]@,interpolant:@,%a@,"
-       pp (sl::log)
+       Game.pp_log game
        pp_sexp (Term.to_sexp interpolant);
      Format.(fprintf stdout) "@]%!";
      raise exc
-     
-   | ExceptionsErrorHandling.YicesException(_,report) as exc
-    ->
-    Format.(fprintf stdout) "@[<v>%a@]%!" Types.pp_error_report report;
-    raise exc
- )
+
+   | FromYicesException(game, report) as exc ->
+     Format.(fprintf stdout) "@[<v2>  %a@]@,error report:@,@[<v2>  %a@]@,"
+       Game.pp_log game
+       Types.pp_error_report report;
+     Format.(fprintf stdout) "@]%!";
+     raise exc
+  )
 | [] -> failwith "Too few arguments in the command"
 | _ -> failwith "Too many arguments in the command";;
 
