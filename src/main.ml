@@ -395,7 +395,7 @@ match !args with
      treat filename;
      Format.(fprintf stdout) "@]%!";
    with
-   | SolveException(game, interpolant) ->
+   | SolveException(game, interpolant) as exc ->
 
      let log = Context.to_sexp game.context in
      let intro sofar t =
@@ -408,13 +408,11 @@ match !args with
      let pp fmt sexplist =
        Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" pp_sexp) sexplist
      in
-     Format.(fprintf stdout) "@[<v2>  %a@]@,%!" pp (sl::log)
-
-     (* let bindings = List.map intro game.support in
-      * let l = Context.to_sexp bindings game.context in 
-      * Format.(fprintf stdout) "@[<v>%a@,@,interpolant:@,%a@]%!"
-      *   Sexp.pp (List(List.rev l))
-      *   Sexp.pp (Term.to_sexp interpolant); *)
+     Format.(fprintf stdout) "@[<v2>  %a@]@,interpolant:@,%a@,"
+       pp (sl::log)
+       pp_sexp (Term.to_sexp interpolant);
+     Format.(fprintf stdout) "@]%!";
+     raise exc
      
    | ExceptionsErrorHandling.YicesException(_,report) as exc
     ->
