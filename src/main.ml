@@ -293,65 +293,68 @@ let rec solve
     (Game.{ context; support; newvars; ground; existentials; foralls } as game)
     model
   =
-  print 3 "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
+  try
+    print 3 "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
 
-  print 4 "@[Trying to solve over-approximations@]@,";
-  match Context.check_with_model context model.model model.support with
-  | `STATUS_UNSAT ->
-    (try
-       let interpolant = Context.get_model_interpolant context in
-       if (Model.get_bool_value model.model interpolant)
-       then raise (SolveException(game, interpolant));
-       let answer = Unsat Term.(not1 interpolant) in
-       print 3 "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
-       answer
-     with
-       ExceptionsErrorHandling.YicesException(_,report) ->
-       raise (FromYicesException(game,report)))
+    print 4 "@[Trying to solve over-approximations@]@,";
+    match Context.check_with_model context model.model model.support with
+    | `STATUS_UNSAT ->
+      let interpolant = Context.get_model_interpolant context in
+      if (Model.get_bool_value model.model interpolant)
+      then raise (SolveException(game, interpolant));
+      let answer = Unsat Term.(not1 interpolant) in
+      print 3 "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
+      answer
 
-  | `STATUS_SAT ->
-    let newmodel = Context.get_model context ~keep_subst:true in
+    | `STATUS_SAT ->
+      let newmodel = Context.get_model context ~keep_subst:true in
 
-    print 4 "@[Trying to solve under-approximations@]@,";
-    let rec under_solve = function
-      | [] -> None
-      | under_i::tail ->
-        Context.push context;
-        Context.assert_formula context under_i;
-        match Context.check_with_model context model.model model.support with
-        | `STATUS_UNSAT -> Context.pop context; under_solve tail 
-        | `STATUS_SAT   -> Context.pop context; Some(sat_answer game under_i)
-        | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
-    in
-    begin
-      match under_solve !(game.under) with
-      | Some term -> Sat term
-      | None ->
-        print 4 "@[Solving over- and under-approximations was not interesting.@]@,";
-        print 4 "@[<v 1>Looking at subgames with model of ground+existentials+learnt:%a@]@,"
-          SModel.pp SModel.{ support; model = newmodel};
-        let rec aux reasons = function
-          | [] ->
-            let reason = Term.andN reasons in
-            if not(List.is_empty reasons) then game.under := reason::!(game.under);
-            Sat(sat_answer game reason)
-          | (u,_)::opponents when not (Model.get_bool_value newmodel u)
-            -> aux (Term.not1 u::reasons) opponents
-          | (u,opponent)::opponents ->
-            print 1 "@[<v 1> ";
-            let recurs = solve opponent { support; model = newmodel} in
-            print 1 "@]@,";
-            match recurs with
-            | Unsat reason -> aux (reason::reasons) opponents
-            | Sat reason ->
-              let learnt = Term.(u ==> not1 reason) in
-              Context.assert_formula context learnt;
-              game.over := learnt::!(game.over);
-              solve game model
-        in
-        aux [] foralls
-    end
-  | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
+      print 4 "@[Trying to solve under-approximations@]@,";
+      let rec under_solve = function
+        | [] -> None
+        | under_i::tail ->
+          Context.push context;
+          Context.assert_formula context under_i;
+          match Context.check_with_model context model.model model.support with
+          | `STATUS_UNSAT -> Context.pop context; under_solve tail 
+          | `STATUS_SAT   ->
+            let term = sat_answer game under_i in
+            Context.pop context;
+            Some term
+          | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
+      in
+      begin
+        match under_solve !(game.under) with
+        | Some term -> Sat term
+        | None ->
+          print 4 "@[Solving over- and under-approximations was not interesting.@]@,";
+          print 4 "@[<v 1>Looking at subgames with model of ground+existentials+learnt:%a@]@,"
+            SModel.pp SModel.{ support; model = newmodel};
+          let rec aux reasons = function
+            | [] ->
+              let reason = Term.andN reasons in
+              if not(List.is_empty reasons) then game.under := reason::!(game.under);
+              Sat(sat_answer game reason)
+            | (u,_)::opponents when not (Model.get_bool_value newmodel u)
+              -> aux (Term.not1 u::reasons) opponents
+            | (u,opponent)::opponents ->
+              print 1 "@[<v 1> ";
+              let recurs = solve opponent { support; model = newmodel} in
+              print 1 "@]@,";
+              match recurs with
+              | Unsat reason -> aux (reason::reasons) opponents
+              | Sat reason ->
+                let learnt = Term.(u ==> not1 reason) in
+                Context.assert_formula context learnt;
+                game.over := learnt::!(game.over);
+                solve game model
+          in
+          aux [] foralls
+      end
+    | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
+  with
+    ExceptionsErrorHandling.YicesException(_,report) ->
+    raise (FromYicesException(game,report))
 
 let () = assert(Global.has_mcsat())
 
