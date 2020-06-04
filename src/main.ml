@@ -24,23 +24,25 @@ module HTerm = Hashtbl.Make(Term)
 module Game = struct  
   type t = {
     id : int;
-    context : Context.t;   (* A Yices context that tries to satisfy this game *)
     support : Term.t list; (* All uninterpreted constants involved in this game *)
     newvars : Term.t list; (* Subset of the above that were not involved in the parent game *)
     ground  : Term.t;      (* Ground abstraction of the game, as a quantifier-free formula *)
-    learnt  : Term.t list ref; (* ground formulas learnt from the foralls *)
+    under   : Term.t list ref; (* Models of ground /\ (\/sufficients) satisfy the game *)
+    over    : Term.t list ref; (* Models of the game satify /\learnt *)
     (* If uninterpreted constant u abstracts away formula (\forall x1...xn A), then *)
     existentials : Term.t list; (* ...ground formula (A{x1\u1...xn\un} => u) goes into that list,
                                    for new uninterpreted constants u1...un *)
-    foralls : (Term.t * t) list (* ... (\forall x1..x2 A) is turned into an adversarial game g
+    foralls : (Term.t * t) list; (* ... (\forall x1..x2 A) is turned into an adversarial game g
                                       and (u,g) goes into that list;
                                       these games are the children game of the current game *)
+    context : Context.t; (* A Yices context that tries to satisfy this game *)
   }
 
-  let rec pp fmt {id; ground; support; learnt; existentials; foralls}
+  let rec pp fmt {id; ground; support; under; over; existentials; foralls}
     = Format.fprintf fmt "@[<v>@[Game id: %i@]@,\
                           @[Variables %i: %a@]@,\
                           @[Ground: %a@]\
+                          %a\
                           %a\
                           %a\
                           %a@]"
@@ -49,7 +51,8 @@ module Game = struct
       (List.pp pp_term) support
       pp_term ground
       (ppl ~prompt:"Existentials:" pp_term) existentials
-      (ppl ~prompt:"Learnt:" pp_term) !learnt
+      (ppl ~prompt:"Over-approximation (\"Learnt\"): conjunction of" pp_term) !over
+      (ppl ~prompt:"Under-approximation: disjunction of" pp_term) !under
       (ppl ~prompt:"Foralls:" pp_forall) foralls
   and pp_forall fmt (u,game) =
     Format.fprintf fmt "@[<v 2>%a standing for@,%a@]" pp_term u pp game
@@ -224,10 +227,12 @@ module Game = struct
       uninterpreted, process config (not player) ~support ~bound:vars (Term.not1 body)
     in
     let foralls = List.map treat foralls in
+    let over = ref [] in
+    let under = ref [] in
     let context = Context.malloc ~config () in
     Context.assert_formula context ground;
     Context.assert_formulas context existentials;
-    { id; context; support; newvars; ground; learnt = ref []; existentials; foralls }
+    { id; support; newvars; ground; existentials; over; under; foralls; context }
 
 end
 
@@ -270,53 +275,82 @@ type answer =
 
 exception SolveException of Game.t * Term.t
 exception FromYicesException of Game.t * Types.error_report
-  
+
+let sat_answer game reason =
+  let open Game in
+  let model = Context.get_model game.context ~keep_subst:true in
+  let true_of_model = reason::game.ground::game.existentials in
+  print 4 "@[true of model is @[<v>   %a@]@]" (List.pp pp_term) true_of_model;
+  let gen_model =
+    Model.generalize_model_list model true_of_model game.newvars `YICES_GEN_BY_PROJ
+  in
+  let answer = Term.(andN gen_model) in
+  print 3 "@[Game %i answer on that model is SAT because %a@]" game.id Term.pp answer;
+  answer
+
+
 let rec solve
     (Game.{ context; support; newvars; ground; existentials; foralls } as game)
     model
   =
   print 3 "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
+
+  print 4 "@[Trying to solve over-approximations@]@,";
   match Context.check_with_model context model.model model.support with
-  |  `STATUS_UNSAT ->
+  | `STATUS_UNSAT ->
     (try
-        let interpolant = Context.get_model_interpolant context in
-        if (Model.get_bool_value model.model interpolant)
-        then raise (SolveException(game, interpolant));
-        let answer = Unsat Term.(not1 interpolant) in
-        print 3 "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
-        answer
-      with
-        ExceptionsErrorHandling.YicesException(_,report) ->
-        raise (FromYicesException(game,report)))
-  |  `STATUS_SAT ->
+       let interpolant = Context.get_model_interpolant context in
+       if (Model.get_bool_value model.model interpolant)
+       then raise (SolveException(game, interpolant));
+       let answer = Unsat Term.(not1 interpolant) in
+       print 3 "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
+       answer
+     with
+       ExceptionsErrorHandling.YicesException(_,report) ->
+       raise (FromYicesException(game,report)))
+
+  | `STATUS_SAT ->
     let newmodel = Context.get_model context ~keep_subst:true in
-    print 4 "@[<v 1>Found model of ground+existentials+learnt:%a@]@," SModel.pp SModel.{ support; model = newmodel};
-    let rec aux reasons = function
-      | [] ->
-        let true_of_model = ground::(List.rev_append existentials reasons) in
-        print 4 "@[true of model is @[<v>   %a@]@]" (List.pp pp_term) true_of_model;
-        let gen_model =
-          Model.generalize_model_list newmodel true_of_model newvars `YICES_GEN_BY_PROJ
-        in
-        let answer = Sat Term.(andN gen_model) in
-        print 3 "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
-        answer
-      | (u,_)::opponents when not (Model.get_bool_value newmodel u)
-        -> aux reasons opponents
-      | (u,opponent)::opponents ->
-        print 1 "@[<v 1> ";
-        let recurs = solve opponent { support; model = newmodel} in
-        print 1 "@]@,";
-        match recurs with
-        | Unsat reason -> aux (reason::reasons) opponents
-        | Sat reason ->
-          let learnt = Term.(u ==> not1 reason) in
-          (* print "@[Learning %a@]@," pp_term learnt; *)
-          Context.assert_formula context learnt;
-          game.learnt := learnt::!(game.learnt);
-          solve game model
+
+    print 4 "@[Trying to solve under-approximations@]@,";
+    let rec under_solve = function
+      | [] -> None
+      | under_i::tail ->
+        Context.push context;
+        Context.assert_formula context under_i;
+        match Context.check_with_model context model.model model.support with
+        | `STATUS_UNSAT -> Context.pop context; under_solve tail 
+        | `STATUS_SAT   -> Context.pop context; Some(sat_answer game under_i)
+        | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
     in
-    aux [] foralls
+    begin
+      match under_solve !(game.under) with
+      | Some term -> Sat term
+      | None ->
+        print 4 "@[Solving over- and under-approximations was not interesting.@]@,";
+        print 4 "@[<v 1>Looking at subgames with model of ground+existentials+learnt:%a@]@,"
+          SModel.pp SModel.{ support; model = newmodel};
+        let rec aux reasons = function
+          | [] ->
+            let reason = Term.andN reasons in
+            if not(List.is_empty reasons) then game.under := reason::!(game.under);
+            Sat(sat_answer game reason)
+          | (u,_)::opponents when not (Model.get_bool_value newmodel u)
+            -> aux (Term.not1 u::reasons) opponents
+          | (u,opponent)::opponents ->
+            print 1 "@[<v 1> ";
+            let recurs = solve opponent { support; model = newmodel} in
+            print 1 "@]@,";
+            match recurs with
+            | Unsat reason -> aux (reason::reasons) opponents
+            | Sat reason ->
+              let learnt = Term.(u ==> not1 reason) in
+              Context.assert_formula context learnt;
+              game.over := learnt::!(game.over);
+              solve game model
+        in
+        aux [] foralls
+    end
   | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
 let () = assert(Global.has_mcsat())
@@ -417,7 +451,7 @@ match !args with
      Format.(fprintf stdout) "@[<v2>  %a@]@,interpolant:@,%a@,"
        Game.pp_log game
        pp_sexp (Term.to_sexp interpolant);
-     Format.(fprintf stdout) "@]%!";
+     Format.(fprintf stderr) "@]%!";
      raise exc
 
    | FromYicesException(game, report) as exc ->
