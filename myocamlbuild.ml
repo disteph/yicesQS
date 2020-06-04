@@ -1,15 +1,5 @@
 open Ocamlbuild_plugin
 
-let debug_option = ref false
-let () = Options.add ("-debug-mode", Unit(fun ()-> debug_option := true), "allows tracing")
-
-let debug_mode env _build =
-  let arg = env "src/debug.mlh" in
-  if !debug_option
-  then Echo(["[%%define debug_mode true]"], arg)
-  else Echo(["[%%define debug_mode false]"], arg)
-    
-(* let rpaths = string_list_of_file "link.rpath" *)
 let static_flags = S [A "-cclib"; A "-static"]
 
 let () = dispatch begin function
@@ -20,10 +10,13 @@ let () = dispatch begin function
           flag ["ocaml"; "link"; "program"; "rpath"] rpath_flags;
           flag ["ocaml"; "link"; "library"; "rpath"] rpath_flags;
       ) [] (* rpaths *);
-      flag ["ocaml"; "link"; "program"; "static"] static_flags;
-      rule "src/debug.mlh" ~prod:"src/debug.mlh" ~insert:(`top) debug_mode;
-      dep ["ocaml"; "ocamldep"] ["src/debug.mlh"];
-      dep ["ocaml"; "compile"] ["src/debug.mlh"];
+      (* flag ["ocaml"; "link"; "program"; "static"] static_flags; *)
       (* pdep ["ocaml"; "compile"] "autodep" (fun param -> [param]); *)
+      (try
+         let ldflags = getenv "LDFLAGS" in
+         print_endline("Using \"-ccopt "^ldflags^"\" from LDFLAGS environment variable.");
+         flag ["ocaml"; "link"] (S [A "-ccopt"; A ldflags])
+       with
+         _ -> ())
     | _ -> ()
   end
