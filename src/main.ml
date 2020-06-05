@@ -35,7 +35,8 @@ module Game = struct
     foralls : (Term.t * t) list; (* ... (\forall x1..x2 A) is turned into an adversarial game g
                                       and (u,g) goes into that list;
                                       these games are the children game of the current game *)
-    context : Context.t; (* A Yices context that tries to satisfy this game *)
+    context_over : Context.t; (* A Yices context that tries to satisfy this game *)
+    context_under : Context.t; (* A Yices context that tries to satisfy this game *)
   }
 
   let rec pp fmt {id; ground; support; under; over; existentials; foralls}
@@ -57,8 +58,11 @@ module Game = struct
   and pp_forall fmt (u,game) =
     Format.fprintf fmt "@[<v 2>%a standing for@,%a@]" pp_term u pp game
 
-  let pp_log fmt game =
-    let log = Context.to_sexp game.context in
+  let pp_log x fmt game =
+    let log = match x with
+      | `over -> Context.to_sexp game.context_over
+      | `under -> Context.to_sexp game.context_under
+    in
     let intro sofar t =
       let typ = Term.type_of_term t in
       let sexp = List[Atom "declare-fun"; Term.to_sexp t; List[]; Type.to_sexp typ] in
@@ -66,12 +70,14 @@ module Game = struct
     in
     let log = List.fold_left intro log game.support in
     let sl = List[Atom "set-logic"; Atom "QF_BV"] in
-    Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" pp_sexp) (sl::log)
+    let option = List[Atom "set-option"; Atom ":produce-unsat-model-interpolants"; Atom "true"] in
+    Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" pp_sexp) (option::sl::log)
   
-  let rec free {context; foralls} =
+  let rec free {context_over; context_under; foralls} =
     let aux (_,g) = free g in
     List.iter aux foralls;
-    Context.free context
+    Context.free context_over;
+    Context.free context_under
 
   let rec search_sub_game i game = 
     if game.id = i then Some game
@@ -229,10 +235,13 @@ module Game = struct
     let foralls = List.map treat foralls in
     let over = ref [] in
     let under = ref [] in
-    let context = Context.malloc ~config () in
-    Context.assert_formula context ground;
-    Context.assert_formulas context existentials;
-    { id; support; newvars; ground; existentials; over; under; foralls; context }
+    let context_over = Context.malloc ~config () in
+    Context.assert_formula context_over ground;
+    Context.assert_formulas context_over existentials;
+    let context_under = Context.malloc ~config () in
+    Context.assert_formula context_under ground;
+    Context.assert_formulas context_under existentials;
+    { id; support; newvars; ground; existentials; over; under; foralls; context_over; context_under }
 
 end
 
@@ -273,12 +282,15 @@ type answer =
   | Sat of Term.t
 [@@deriving show { with_path = false }]
 
-exception SolveException of Game.t * Term.t
+exception BadInterpolant of Game.t * Term.t
 exception FromYicesException of Game.t * Types.error_report
 
-let sat_answer game reason =
+let sat_answer x game reason =
   let open Game in
-  let model = Context.get_model game.context ~keep_subst:true in
+  let model = match x with
+    | `over  -> Context.get_model game.context_over ~keep_subst:true
+    | `under -> Context.get_model game.context_under ~keep_subst:true
+  in
   let true_of_model = reason::game.ground::game.existentials in
   print 4 "@[true of model is @[<v>   %a@]@]" (List.pp pp_term) true_of_model;
   let gen_model =
@@ -290,36 +302,36 @@ let sat_answer game reason =
 
 
 let rec solve
-    (Game.{ context; support; newvars; ground; existentials; foralls } as game)
+    (Game.{ context_over; context_under; support; newvars; ground; existentials; foralls } as game)
     model
   =
   try
     print 3 "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
 
     print 4 "@[Trying to solve over-approximations@]@,";
-    match Context.check_with_model context model.model model.support with
+    match Context.check_with_model context_over model.model model.support with
     | `STATUS_UNSAT ->
-      let interpolant = Context.get_model_interpolant context in
+      let interpolant = Context.get_model_interpolant context_over in
       if (Model.get_bool_value model.model interpolant)
-      then raise (SolveException(game, interpolant));
+      then raise (BadInterpolant(game, interpolant));
       let answer = Unsat Term.(not1 interpolant) in
       print 3 "@[Game %i answer on that model is %a@]" game.id pp_answer answer;
       answer
 
     | `STATUS_SAT ->
-      let newmodel = Context.get_model context ~keep_subst:true in
+      let newmodel = Context.get_model context_over ~keep_subst:true in
 
       print 4 "@[Trying to solve under-approximations@]@,";
       let rec under_solve = function
         | [] -> None
         | under_i::tail ->
-          Context.push context;
-          Context.assert_formula context under_i;
-          match Context.check_with_model context model.model model.support with
-          | `STATUS_UNSAT -> Context.pop context; under_solve tail 
+          Context.push context_under;
+          Context.assert_formula context_under under_i;
+          match Context.check_with_model context_under model.model model.support with
+          | `STATUS_UNSAT -> Context.pop context_under; under_solve tail 
           | `STATUS_SAT   ->
-            let term = sat_answer game under_i in
-            Context.pop context;
+            let term = sat_answer `under game under_i in
+            Context.pop context_under;
             Some term
           | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
       in
@@ -334,7 +346,7 @@ let rec solve
             | [] ->
               let reason = Term.andN reasons in
               if not(List.is_empty reasons) then game.under := reason::!(game.under);
-              Sat(sat_answer game reason)
+              Sat(sat_answer `over game reason)
             | (u,_)::opponents when not (Model.get_bool_value newmodel u)
               -> aux (Term.not1 u::reasons) opponents
             | (u,opponent)::opponents ->
@@ -345,7 +357,8 @@ let rec solve
               | Unsat reason -> aux (reason::reasons) opponents
               | Sat reason ->
                 let learnt = Term.(u ==> not1 reason) in
-                Context.assert_formula context learnt;
+                Context.assert_formula context_over learnt;
+                Context.assert_formula context_under learnt;
                 game.over := learnt::!(game.over);
                 solve game model
           in
@@ -373,7 +386,8 @@ let treat filename =
     match sexp with
     | List(Atom head::args) ->
       print 1 "@[Traversing sexp @[%a@]@]@," Sexplib.Sexp.pp sexp;
-      begin match head, args, !(session.env) with
+      begin
+        match head, args, !(session.env) with
         | "set-info",   [Atom ":status"; Atom "sat"],   _ ->
           expected := Some true
 
@@ -432,6 +446,30 @@ let treat filename =
   List.iter treat sexps;
   print 1 "@[Exited gracefully@]@,"
 
+
+let print_file filename destination x =
+  let newfile = Filename.(filename |> remove_extension |> basename) in
+  let newfile = match x with
+    | `over  -> newfile^".over.smt2"
+    | `under -> newfile^".under.smt2"
+  in
+  let newfile = Filename.concat destination newfile in
+  Format.(fprintf stdout) "%s@,%!" ("Writing log to "^newfile);
+  Format.to_file newfile "@[<v>%a@]" (Game.pp_log x)
+
+let copy_file filename destination =
+  let newfile = Filename.(filename |> basename |> concat destination ) in
+  CCIO.(
+    with_in filename
+      (fun ic ->
+         let chunks = read_chunks_gen ic in
+         with_out ~flags:[Open_binary; Open_creat] newfile
+           (fun oc ->
+              write_gen oc chunks
+           )
+      )
+  )
+
 open Arg
 
 let args = ref []
@@ -450,19 +488,27 @@ match !args with
      treat filename;
      Format.(fprintf stdout) "@]%!";
    with
-   | SolveException(game, interpolant) as exc ->
-     Format.(fprintf stdout) "@[<v2>  %a@]@,interpolant:@,%a@,"
-       Game.pp_log game
-       pp_sexp (Term.to_sexp interpolant);
-     Format.(fprintf stderr) "@]%!";
+   | BadInterpolant(game, interpolant) as exc ->
+     print_file filename "issues/bad_interpolant" `over game;
+     copy_file filename "issues/bad_interpolant";
+     Format.(fprintf stdout) "Interpolant:@,%a@," Term.pp interpolant;
+     Format.(fprintf stdout) "@]%!";
      raise exc
 
    | FromYicesException(game, report) as exc ->
-     Format.(fprintf stdout) "@[<v2>  %a@]@,error report:@,@[<v2>  %a@]@,"
-       Game.pp_log game
+     print_file filename "issues/yices_exc" `over game;
+     print_file filename "issues/yices_exc" `under game;
+     copy_file filename "issues/yices_exc";
+     Format.(fprintf stdout) "@Error report:@,@[<v2>  %a@]@,"
        Types.pp_error_report report;
      Format.(fprintf stdout) "@]%!";
      raise exc
+
+   | Yices_SMT2_exception s as exc ->
+     Format.(fprintf stdout) "@[SMT2 error: %s@]@," s;
+     Format.(fprintf stdout) "@]%!";
+     raise exc
+
   )
 | [] -> failwith "Too few arguments in the command"
 | _ -> failwith "Too many arguments in the command";;
