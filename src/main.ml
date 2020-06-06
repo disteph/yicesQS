@@ -505,6 +505,7 @@ match !args with
      raise exc
 
    | Yices_SMT2_exception s as exc ->
+     copy_file filename "issues/SMT_exc";
      Format.(fprintf stdout) "@[SMT2 error: %s@]@," s;
      Format.(fprintf stdout) "@]%!";
      raise exc
