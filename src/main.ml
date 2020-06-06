@@ -447,28 +447,30 @@ let treat filename =
   print 1 "@[Exited gracefully@]@,"
 
 
-let print_file filename destination x =
-  let newfile = Filename.(filename |> remove_extension |> basename) in
-  let newfile = match x with
-    | `over  -> newfile^".over.smt2"
-    | `under -> newfile^".under.smt2"
-  in
-  let newfile = Filename.concat destination newfile in
-  Format.(fprintf stdout) "%s@,%!" ("Writing log to "^newfile);
-  Format.to_file newfile "@[<v>%a@]" (Game.pp_log x)
+let print_file filename destination x game =
+  if !verbosity > 0 then
+    let newfile = Filename.(filename |> remove_extension |> basename) in
+    let newfile = match x with
+      | `over  -> newfile^".over.smt2"
+      | `under -> newfile^".under.smt2"
+    in
+    let newfile = Filename.concat destination newfile in
+    Format.(fprintf stdout) "%s@,%!" ("Writing log to "^newfile);
+    Format.to_file newfile "@[<v>%a@]" (Game.pp_log x) game
 
 let copy_file filename destination =
-  let newfile = Filename.(filename |> basename |> concat destination ) in
-  CCIO.(
-    with_in filename
-      (fun ic ->
-         let chunks = read_chunks_gen ic in
-         with_out ~flags:[Open_binary; Open_creat] newfile
-           (fun oc ->
-              write_gen oc chunks
-           )
-      )
-  )
+  if !verbosity > 0 then
+    let newfile = Filename.(filename |> basename |> concat destination ) in
+    CCIO.(
+      with_in filename
+        (fun ic ->
+           let chunks = read_chunks_gen ic in
+           with_out ~flags:[Open_binary; Open_creat] newfile
+             (fun oc ->
+                write_gen oc chunks
+             )
+        )
+    )
 
 open Arg
 
