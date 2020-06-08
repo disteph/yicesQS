@@ -24,34 +24,35 @@ module HTerm = Hashtbl.Make(Term)
 module Game = struct  
   type t = {
     id : int;
-    support : Term.t list; (* All uninterpreted constants involved in this game *)
-    newvars : Term.t list; (* Subset of the above that were not involved in the parent game *)
+    rigid   : Term.t list; (* Eigenvariables that will systematically be set by ancestor games *)
+    newvars : Term.t list; (* Eigenvariables to be set by this game, disjoint from above *)
     ground  : Term.t;      (* Ground abstraction of the game, as a quantifier-free formula *)
-    under   : Term.t list ref; (* Models of ground /\ (\/sufficients) satisfy the game *)
-    over    : Term.t list ref; (* Models of the game satify /\learnt *)
+    over    : Term.t list ref; (* Models of the game satify ground /\ /\over *)
+    under   : Term.t list ref; (* Models of ground /\ \/under satisfy the game *)
     (* If uninterpreted constant u abstracts away formula (\forall x1...xn A), then *)
-    existentials : Term.t list; (* ...ground formula (A{x1\u1...xn\un} => u) goes into that list,
-                                   for new uninterpreted constants u1...un *)
     foralls : (Term.t * t) list; (* ... (\forall x1..x2 A) is turned into an adversarial game g
                                       and (u,g) goes into that list;
                                       these games are the children game of the current game *)
-    context_over : Context.t; (* A Yices context that tries to satisfy this game *)
-    context_under : Context.t; (* A Yices context that tries to satisfy this game *)
+    context_over  : Context.t; (* A Yices context that tries to satisfy ground /\ /\over *)
+    context_under : Context.t; (* A Yices context that tries to satisfy ground /\ \/under *)
   }
 
-  let rec pp fmt {id; ground; support; under; over; existentials; foralls}
+  type game = t
+  
+  let rec pp fmt {id; rigid; newvars; ground; under; over; foralls}
     = Format.fprintf fmt "@[<v>@[Game id: %i@]@,\
-                          @[Variables %i: %a@]@,\
+                          @[Ancestors' variables %i: %a@]@,\
+                          @[Free variables %i: %a@]@,\
                           @[Ground: %a@]\
-                          %a\
                           %a\
                           %a\
                           %a@]"
       id
-      (List.length support)
-      (List.pp pp_term) support
+      (List.length rigid)
+      (List.pp pp_term) rigid
+      (List.length newvars)
+      (List.pp pp_term) newvars
       pp_term ground
-      (ppl ~prompt:"Existentials:" pp_term) existentials
       (ppl ~prompt:"Over-approximation (\"Learnt\"): conjunction of" pp_term) !over
       (ppl ~prompt:"Under-approximation: disjunction of" pp_term) !under
       (ppl ~prompt:"Foralls:" pp_forall) foralls
@@ -68,16 +69,20 @@ module Game = struct
       let sexp = List[Atom "declare-fun"; Term.to_sexp t; List[]; Type.to_sexp typ] in
       sexp::sofar
     in
-    let log = List.fold_left intro log game.support in
+    let log = List.fold_left intro log game.newvars in
+    let log = List.fold_left intro log game.rigid in
     let sl = List[Atom "set-logic"; Atom "QF_BV"] in
     let option = List[Atom "set-option"; Atom ":produce-unsat-model-interpolants"; Atom "true"] in
     Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" pp_sexp) (option::sl::log)
-  
-  let rec free {context_over; context_under; foralls} =
-    let aux (_,g) = free g in
-    List.iter aux foralls;
+
+  let free {context_over; context_under } =
     Context.free context_over;
     Context.free context_under
+  
+  let free game =
+    let aux (_,g) = free g in
+    List.iter aux game.foralls;
+    free game
 
   let rec search_sub_game i game = 
     if game.id = i then Some game
@@ -91,23 +96,13 @@ module Game = struct
       in
       aux game.foralls
   
-  (* The following datastructure is used to record
-     that uninterpreted constant u abstracts away formula (\forall x1...xn A):
-     { uninterpreted = u; vars = x1...xn; body = A } *)
-  type forall = {
-    uninterpreted : Term.t;
-    vars : Term.t list;
-    body : Term.t
-  }
-
   (* The encoding of a formula into a game is done with a state monad,
-     where the state is this*)
+     where the state is this *)
 
   type state = {
-    support : Term.t list;
     newvars : Term.t list;
-    existentials: Term.t list;
-    foralls : forall list
+    foralls : (Term.t * t) list;
+    existentials : Term.t list;
   }
 
   (* The state monad *)
@@ -127,43 +122,42 @@ module Game = struct
   type subst = (Term.t * Term.t) list
 
   let var_add newvar a state =
-    let support = newvar::state.support in
     let newvars = newvar::state.newvars in
-    a, { state with support; newvars }
+    a, { state with newvars }
 
   let bound_counter = ref 0
 
-  let fresh_bound () =
+  let fresh_bound () : string =
     let name = "y!"^string_of_int !bound_counter in
     incr bound_counter;
     name
 
-  let fresh vars body =
-    let aux subst v =
+  let fresh rigid bound body : Term.t * Term.t list * Term.t list =
+    let aux (subst, rigid, newvars) v =
       let typ = Term.type_of_term v in
       let name = fresh_bound() in
       let newvar = Term.new_uninterpreted ~name typ in
-      var_add newvar ((v,newvar)::subst)
+      ((v,newvar)::subst), (newvar::rigid), (newvar::newvars)
     in
-    let+ subst = MList.fold aux (return []) vars in
-    return (Term.subst_term subst body)
+    let subst, rigid, newvars = List.fold_left aux ([], rigid, []) bound in
+    Term.subst_term subst body, rigid, newvars
 
-  let fresh1 vars body =
-    let h = HType.create 10 in
-    let aux subst v =
-      let typ = Term.type_of_term v in
-      if HType.mem h typ
-      then return ((v, HType.find h typ)::subst)
-      else
-        begin
-          let name = fresh_bound() in
-          let newvar = Term.new_uninterpreted ~name typ in
-          HType.add h typ newvar;
-          var_add newvar ((v,newvar)::subst)
-        end
-    in
-    let+ subst = MList.fold aux (return []) vars in
-    return (Term.subst_term subst body)
+  (* let fresh1 vars body =
+   *   let h = HType.create 10 in
+   *   let aux subst v =
+   *     let typ = Term.type_of_term v in
+   *     if HType.mem h typ
+   *     then return ((v, HType.find h typ)::subst)
+   *     else
+   *       begin
+   *         let name = fresh_bound() in
+   *         let newvar = Term.new_uninterpreted ~name typ in
+   *         HType.add h typ newvar;
+   *         var_add newvar ((v,newvar)::subst)
+   *       end
+   *   in
+   *   let+ subst = MList.fold aux (return []) vars in
+   *   return (Term.subst_term subst body) *)
 
 
   exception CannotTreat of Term.t
@@ -177,71 +171,66 @@ module Game = struct
     incr fa_counter;
     name
 
-  let rec process config player ~support ~bound t =
-    print 5 "@[Traversing term @[%a@]@]@," pp_term t;
-    let id = if player then 2*(!counter) else (2*(!counter))+1 in
+  let foralls_rev = HTerm.create 10
+
+
+  (* rigidintro = rigid + intro *)
+  let rec process config ~rigidintro ~rigid ~intro body : game =
+
+    let rec aux t : Term.t StateMonad.t =
+      let Term a = Term.reveal t in
+      match a with
+      | Bindings { c = `YICES_FORALL_TERM;
+                   vars;
+                   body }
+        ->
+        if HTerm.mem foralls_rev t
+        then
+          return(HTerm.find foralls_rev t) (* returns placeholder previously generated *)
+        else
+          begin
+            (* We create a name for the forall formula *)
+            let name = fresh_placeholder() in
+            let uninterpreted = Term.new_uninterpreted ~name (Type.bool()) in
+            (* We instantiate the forall formula ,
+               instantiating all bound variables by the same uninterpreted term (per type)
+               this is used to produce a "lucky" instance of the formula *)
+            (* let+ substituted1 = fresh1 vars body in *)
+            (* let+ lucky_instance = aux substituted1 in *)
+            (* let t'   = Term.(uninterpreted &&& lucky_instance) in *)
+            let substituted, rigidintro_sub, intro_sub = fresh rigidintro vars body in
+            let subgame = process config ~rigidintro:rigidintro_sub ~rigid:rigidintro ~intro:intro_sub (Term.not1 substituted) in
+            let t'      = uninterpreted in
+            HTerm.add foralls_rev t t';
+            fun state ->
+              print 4 "@[Abstracting @[%a@], which becomes @[%a@]@]@," pp_term t pp_term t';
+              let newvars = uninterpreted           ::(List.append subgame.newvars state.newvars) in
+              let foralls = (uninterpreted, subgame)::(List.append subgame.foralls state.foralls) in
+              let existentials = Term.(subgame.ground ||| uninterpreted)::state.existentials in
+              t', { newvars; foralls; existentials }
+          end
+      | Bindings { c = `YICES_LAMBDA_TERM } -> raise(CannotTreat t)
+      | A0 _ -> return t
+      | _ ->
+        let+ x = map aux a in return(Term.build x)
+    in
+    print 5 "@[Traversing term @[%a@]@]@," pp_term body;
+    let id = !counter in
     incr counter;
-    let tmp =
-      let foralls_rev = HTerm.create 10 in
-      let rec aux t =
-        let Term a = Term.reveal t in
-        match a with
-        | Bindings { c = `YICES_FORALL_TERM;
-                     vars;
-                     body }
-          ->
-          if HTerm.mem foralls_rev t
-          then
-            return(HTerm.find foralls_rev t)
-          else
-            begin
-              (* We create a name for the forall formula *)
-              let name = fresh_placeholder() in
-              let uninterpreted = Term.new_uninterpreted ~name (Type.bool()) in
-              (* We instantiate the forall formula in 2 ways *)
-              (* once instantiating all bound variables by the same uninterpreted term (per type) *)
-              (* let+ substituted1 = fresh1 vars body in *)
-              (* once instantiating all bound variables by distinct eigenvariables *)
-              let+ substituted  = fresh vars body in
-              (* (\* the former version is used to produce a "lucky" instance of the formula *\)
-               * let+ lucky_instance = aux substituted1 in *)
-              (* the latter version is used to produce a "lucky" instance of the formula *)
-              let+ existential = aux substituted in
-              (* let t'           = Term.(uninterpreted &&& lucky_instance) in *)
-              let t'           = uninterpreted in
-              HTerm.add foralls_rev t t';
-              fun state ->
-                print 4 "@[Abstracting @[%a@], which becomes @[%a@]@]@," pp_term t pp_term t';
-                let support      = uninterpreted::state.support in
-                let newvars      = uninterpreted::state.newvars in
-                let existentials = Term.(existential ==> uninterpreted)::state.existentials in
-                let foralls      = { uninterpreted; vars; body }::state.foralls in
-                t', { support; newvars; existentials; foralls }
-            end
-        | Bindings { c = `YICES_LAMBDA_TERM } -> raise(CannotTreat t)
-        | A0 _ -> return t
-        | _ ->
-          let+ x = map aux a in return(Term.build x)
-      in
-      (* creating meta-variables for the bound variables we are given *)
-      let+ t = fresh bound t in
-      aux t
-    in
-    let state = { support; newvars = []; existentials = []; foralls = [] } in
-    let ground, { support; newvars; existentials; foralls } = tmp state in
-    let treat { uninterpreted; vars; body } =
-      uninterpreted, process config (not player) ~support ~bound:vars (Term.not1 body)
-    in
-    let foralls = List.map treat foralls in
-    let over = ref [] in
-    let under = ref [] in
+    let state = { newvars = intro; foralls = []; existentials = [] } in
+    let ground, { newvars; foralls; existentials } = aux body state in
+    print 1 "@[Ground is @[%a@]@]@," pp_term ground;
+    print 1 "@[Existentials are @[%a@]@]@," (List.pp pp_term) existentials;
+    let over   = ref [] in
+    let under  = ref [] in
     let context_over = Context.malloc ~config () in
     Context.assert_formula context_over ground;
     Context.assert_formulas context_over existentials;
     let context_under = Context.malloc ~config () in
     Context.assert_formula context_under ground;
     Context.assert_formulas context_under existentials;
-    { id; support; newvars; ground; existentials; over; under; foralls; context_over; context_under }
+    let ground  = Term.(ground &&& andN existentials) in
+    { id; rigid; newvars; ground; over; under; foralls; context_over; context_under }
 
 end
 
@@ -291,27 +280,23 @@ let sat_answer x game reason =
     | `over  -> Context.get_model game.context_over ~keep_subst:true
     | `under -> Context.get_model game.context_under ~keep_subst:true
   in
-  let true_of_model = reason::game.ground::game.existentials in
-  print 4 "@[true of model is @[<v>   %a@]@]" (List.pp pp_term) true_of_model;
+  let true_of_model = Term.(reason &&& game.ground) in
+  print 4 "@[true of model is @[<v>   %a@]@]" pp_term true_of_model;
   let gen_model =
-    Model.generalize_model_list model true_of_model game.newvars `YICES_GEN_BY_PROJ
+    Model.generalize_model model true_of_model game.newvars `YICES_GEN_DEFAULT
   in
   let answer = Term.(andN gen_model) in
   print 3 "@[Game %i answer on that model is SAT because %a@]" game.id Term.pp answer;
   answer
 
 
-let rec solve
-    (Game.{ context_over; context_under; support; newvars; ground; existentials; foralls } as game)
-    model
-  =
-  try
-    print 3 "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
+let rec solve game model = try
+    print 1 "@[<v 3>@[Solving game:@]@,%a@,from model%a@]@," Game.pp game SModel.pp model;
 
     print 4 "@[Trying to solve over-approximations@]@,";
-    match Context.check_with_model context_over model.model model.support with
+    match Context.check_with_model game.context_over model.model model.support with
     | `STATUS_UNSAT ->
-      let interpolant = Context.get_model_interpolant context_over in
+      let interpolant = Context.get_model_interpolant game.context_over in
       if (Model.get_bool_value model.model interpolant)
       then raise (BadInterpolant(game, interpolant));
       let answer = Unsat Term.(not1 interpolant) in
@@ -319,19 +304,23 @@ let rec solve
       answer
 
     | `STATUS_SAT ->
-      let newmodel = Context.get_model context_over ~keep_subst:true in
+      let newmodel = Context.get_model game.context_over ~keep_subst:true in
+      print 4 "@[Found model of over-approx @[<v 2>  %a@]@]@,"
+        SModel.pp
+        SModel.{support = List.append game.rigid game.newvars; model = newmodel }
+      ;
 
       print 4 "@[Trying to solve under-approximations@]@,";
       let rec under_solve = function
         | [] -> None
         | under_i::tail ->
-          Context.push context_under;
-          Context.assert_formula context_under under_i;
-          match Context.check_with_model context_under model.model model.support with
-          | `STATUS_UNSAT -> Context.pop context_under; under_solve tail 
+          Context.push game.context_under;
+          Context.assert_formula game.context_under under_i;
+          match Context.check_with_model game.context_under model.model model.support with
+          | `STATUS_UNSAT -> Context.pop game.context_under; under_solve tail 
           | `STATUS_SAT   ->
             let term = sat_answer `under game under_i in
-            Context.pop context_under;
+            Context.pop game.context_under;
             Some term
           | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
       in
@@ -339,9 +328,7 @@ let rec solve
         match under_solve !(game.under) with
         | Some term -> Sat term
         | None ->
-          print 4 "@[Solving over- and under-approximations was not interesting.@]@,";
-          print 4 "@[<v 1>Looking at subgames with model of ground+existentials+learnt:%a@]@,"
-            SModel.pp SModel.{ support; model = newmodel};
+          print 4 "@[Solving over- and under-approximations was not interesting; looking at subgames.@]@,";
           let rec aux reasons = function
             | [] ->
               let reason = Term.andN reasons in
@@ -351,18 +338,18 @@ let rec solve
               -> aux (Term.not1 u::reasons) opponents
             | (u,opponent)::opponents ->
               print 1 "@[<v 1> ";
-              let recurs = solve opponent { support; model = newmodel} in
+              let recurs = solve opponent { support = opponent.rigid; model = newmodel} in
               print 1 "@]@,";
               match recurs with
               | Unsat reason -> aux (reason::reasons) opponents
               | Sat reason ->
                 let learnt = Term.(u ==> not1 reason) in
-                Context.assert_formula context_over learnt;
-                Context.assert_formula context_under learnt;
+                Context.assert_formula game.context_over learnt;
+                Context.assert_formula game.context_under learnt; (* Not necessary; useful? *)
                 game.over := learnt::!(game.over);
                 solve game model
           in
-          aux [] foralls
+          aux [] game.foralls
       end
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
   with
@@ -413,7 +400,12 @@ let treat filename =
         | "check-sat", [], Some env ->
           let formula = Term.(andN !assertions) in
           print 2 "@[<v 2>@[Computing game@]@,";
-          let game = Game.process session.config true ~support:!support ~bound:[] formula in
+          let game = Game.process session.config
+              ~rigidintro:!support
+              ~rigid:[]
+              ~intro:!support
+              formula
+          in
           print 3 "@[<v 1>@[Computed game is:@]@,@[%a@]@]@,%!" Game.pp game;
           print 2 "@]@,";
           let _status = Context.check env.context in
