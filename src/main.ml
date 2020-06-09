@@ -6,6 +6,7 @@ open Yices2_ext_bindings
 open Yices2_SMT2
 
 let verbosity = ref 0
+let filedump  = ref None
 
 let print i fs = Format.((if !verbosity >= i then fprintf else ifprintf) stdout) fs
 
@@ -219,8 +220,6 @@ module Game = struct
     incr counter;
     let state = { newvars = intro; foralls = []; existentials = [] } in
     let ground, { newvars; foralls; existentials } = aux body state in
-    print 1 "@[Ground is @[%a@]@]@," pp_term ground;
-    print 1 "@[Existentials are @[%a@]@]@," (List.pp pp_term) existentials;
     let over   = ref [] in
     let under  = ref [] in
     let context_over = Context.malloc ~config () in
@@ -440,19 +439,23 @@ let treat filename =
 
 
 let print_file filename destination x game =
-  if !verbosity > 0 then
+  match !filedump with
+  | None -> ()
+  | Some prefix ->
     let newfile = Filename.(filename |> remove_extension |> basename) in
     let newfile = match x with
       | `over  -> newfile^".over.smt2"
       | `under -> newfile^".under.smt2"
     in
-    let newfile = Filename.concat destination newfile in
+    let newfile = Filename.(newfile |> concat destination |> concat prefix) in
     Format.(fprintf stdout) "%s@,%!" ("Writing log to "^newfile);
     Format.to_file newfile "@[<v>%a@]" (Game.pp_log x) game
 
 let copy_file filename destination =
-  if !verbosity > 0 then
-    let newfile = Filename.(filename |> basename |> concat destination ) in
+  match !filedump with
+  | None -> ()
+  | Some prefix ->
+    let newfile = Filename.(filename |> basename |> concat destination |> concat prefix) in
     CCIO.(
       with_in filename
         (fun ic ->
@@ -470,7 +473,8 @@ let args = ref []
 let description = "QE in Yices"
 
 let options = [
-  ("-verb", Int(fun i -> verbosity := i), "Verbosity level (default is 0)");
+  ("-verb",     Int(fun i -> verbosity := i), "Verbosity level (default is 0)");
+  ("-filedump", String(fun s -> filedump := Some s), "Dump file in case of error: if so, give path prefix (default is no file dump)");
 ];;
 
 Arg.parse options (fun a->args := a::!args) description;;
@@ -483,23 +487,23 @@ match !args with
      Format.(fprintf stdout) "@]%!";
    with
    | BadInterpolant(game, interpolant) as exc ->
-     print_file filename "issues/bad_interpolant" `over game;
-     copy_file filename "issues/bad_interpolant";
+     print_file filename "bad_interpolant" `over game;
+     copy_file filename "bad_interpolant";
      Format.(fprintf stdout) "Interpolant:@,%a@," Term.pp interpolant;
      Format.(fprintf stdout) "@]%!";
      raise exc
 
    | FromYicesException(game, report) as exc ->
-     print_file filename "issues/yices_exc" `over game;
-     print_file filename "issues/yices_exc" `under game;
-     copy_file filename "issues/yices_exc";
-     Format.(fprintf stdout) "@Error report:@,@[<v2>  %a@]@,"
+     print_file filename "yices_exc" `over game;
+     print_file filename "yices_exc" `under game;
+     copy_file filename "yices_exc";
+     Format.(fprintf stdout) "@[Error report:@,@[<v2>  %a@]@]@,"
        Types.pp_error_report report;
      Format.(fprintf stdout) "@]%!";
      raise exc
 
    | Yices_SMT2_exception s as exc ->
-     copy_file filename "issues/SMT_exc";
+     copy_file filename "SMT_exc";
      Format.(fprintf stdout) "@[SMT2 error: %s@]@," s;
      Format.(fprintf stdout) "@]%!";
      raise exc
