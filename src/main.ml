@@ -30,10 +30,11 @@ module Game = struct
     ground  : Term.t;      (* Ground abstraction of the game, as a quantifier-free formula *)
     over    : Term.t list ref; (* Models of the game satify ground /\ /\over *)
     under   : Term.t list ref; (* Models of ground /\ \/under satisfy the game *)
-    (* If uninterpreted constant u abstracts away formula (\forall x1...xn A), then *)
-    foralls : (Term.t * t) list; (* ... (\forall x1..x2 A) is turned into an adversarial game g
-                                      and (u,g) goes into that list;
-                                      these games are the children game of the current game *)
+    (* If uninterpreted constant u abstracts away formula (\forall x1...xn neg A), then *)
+    existentials : Term.t list; (* ... (u \/ A) is registered as a ground constraint *)
+    foralls : (Term.t * t) list; (* ... (\forall x1..x2 neg A) is turned into an adversarial
+                                    game g and (u,g) goes into that list;
+                                    these games are the children game of the current game *)
     context_over  : Context.t; (* A Yices context that tries to satisfy ground /\ /\over *)
     context_under : Context.t; (* A Yices context that tries to satisfy ground /\ \/under *)
   }
@@ -205,9 +206,11 @@ module Game = struct
             HTerm.add foralls_rev t t';
             fun state ->
               print 4 "@[Abstracting @[%a@], which becomes @[%a@]@]@," pp_term t pp_term t';
-              let newvars = uninterpreted           ::(List.append subgame.newvars state.newvars) in
-              let foralls = (uninterpreted, subgame)::(List.append subgame.foralls state.foralls) in
-              let existentials = Term.(subgame.ground ||| uninterpreted)::state.existentials in
+              let newforall = uninterpreted, subgame in
+              let newexistential = Term.(uninterpreted ||| subgame.ground) in
+              let newvars = uninterpreted      ::(List.append subgame.newvars state.newvars) in
+              let foralls = newforall          ::(List.append subgame.foralls state.foralls) in
+              let existentials = newexistential::(List.append subgame.existentials state.existentials) in
               t', { newvars; foralls; existentials }
           end
       | Bindings { c = `YICES_LAMBDA_TERM } -> raise(CannotTreat t)
@@ -228,8 +231,7 @@ module Game = struct
     let context_under = Context.malloc ~config () in
     Context.assert_formula context_under ground;
     Context.assert_formulas context_under existentials;
-    let ground  = Term.(ground &&& andN existentials) in
-    { id; rigid; newvars; ground; over; under; foralls; context_over; context_under }
+    { id; rigid; newvars; ground; over; under; existentials; foralls; context_over; context_under }
 
 end
 
