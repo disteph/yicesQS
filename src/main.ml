@@ -281,7 +281,7 @@ let sat_answer x game reason =
     | `over  -> Context.get_model game.context_over ~keep_subst:true
     | `under -> Context.get_model game.context_under ~keep_subst:true
   in
-  let true_of_model = Term.(reason &&& game.ground) in
+  let true_of_model = Term.(reason &&& game.ground &&& (andN game.existentials)) in
   print 4 "@[true of model is @[<v>   %a@]@]" pp_term true_of_model;
   let gen_model =
     Model.generalize_model model true_of_model game.newvars `YICES_GEN_DEFAULT
