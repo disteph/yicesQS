@@ -220,10 +220,10 @@ module Game = struct
             in
             let newnaming = name, selector, SubGame.ground in
             fun state ->
-              print 4 "@[<2>Abstracting as %a formula @,%a@]@," pp_term name pp_term t;
-              let newvars = name::selector::(List.append SubGame.top_level.newvars state.newvars) in
-              let foralls = newforall ::(List.append SubGame.top_level.foralls state.foralls) in
-              let namings = newnaming ::(List.append SubGame.namings state.namings) in
+              print 5 "@[<2>Abstracting as %a formula @,%a@]@," pp_term name pp_term t;
+              let newvars = List.append SubGame.top_level.newvars (name::selector::state.newvars) in
+              let foralls = List.append SubGame.top_level.foralls (newforall::state.foralls) in
+              let namings = List.append SubGame.namings           (newnaming::state.namings) in
               name, { newvars; foralls; namings }
           end
       | Bindings { c = `YICES_LAMBDA_TERM } -> raise(CannotTreat t)
@@ -381,7 +381,7 @@ let rec solve state ?selector level model = try
       let newmodel = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         SModel.pp
-        SModel.{support = List.append model.support level.newvars; model = newmodel }
+        SModel.{support = List.append level.newvars model.support; model = newmodel }
       ;
       let rec aux reasons = function
         | [] ->
@@ -418,10 +418,6 @@ let rec solve state ?selector level model = try
               Model.generalize_model newmodel.model reason [o.name] `YICES_GEN_DEFAULT
             in
             let learnt = Term.(o.name ==> not1 (andN gen_model)) in
-            let learnt = match selector with
-              | Some s -> Term.(s ==> learnt)
-              | None -> learnt
-            in
             Context.assert_formula context learnt;
             print 1 "@]@,";
             print 4 "@[<2>Learnt clause:@,%a@]@," pp_term learnt;
