@@ -55,9 +55,8 @@ module Level = struct
       (List.pp ~sep:" " pp_term) newvars
       pp_foralls foralls
   and pp_forall fmt {name; selector; sublevel} =
-    Format.fprintf fmt "@[<v 2>%a (with selector %a) opens sub-level@,%a@]"
+    Format.fprintf fmt "@[<v 2>%a opens sub-level@,%a@]"
       pp_term name
-      pp_term selector
       pp sublevel
   and pp_foralls fmt = function
     | [] -> ()
@@ -86,9 +85,8 @@ module Game = struct
   let pp fmt (module T:T) =
     let open T in
     let pp_naming fmt (u,trigger,formula) =
-      Format.fprintf fmt "@[<2>%a (with selector %a) standing for@ %a@]"
+      Format.fprintf fmt "@[<2>%a standing for@ %a@]"
         pp_term u
-        pp_term trigger
         pp_term formula
     in
     Format.fprintf fmt "@[<v>\
@@ -188,17 +186,19 @@ module Game = struct
                    vars;
                    body }
         ->
-        if HTerm.mem foralls_rev t
+        if false
         then
           return(HTerm.find foralls_rev t) (* returns placeholder previously generated *)
         else
           begin
             (* Creating a selector for the forall formula *)
-            let name     = fresh_placeholder() in
+            let freshcount = string_of_int !fa_counter in
+            incr fa_counter;
+            let name  = "trig"^freshcount in
             let selector = Term.new_uninterpreted ~name (Type.bool()) in
             (* Creating a name for the forall formula *)
-            let name     = fresh_placeholder() in
-            let name     = Term.new_uninterpreted ~name (Type.bool()) in
+            let name  = "name"^freshcount in
+            let name  = Term.new_uninterpreted ~name (Type.bool()) in
             HTerm.add foralls_rev t name;
             (* We instantiate the forall formula ,
                instantiating all bound variables by the same uninterpreted term (per type)
@@ -221,7 +221,7 @@ module Game = struct
             let newnaming = name, selector, SubGame.ground in
             fun state ->
               print 4 "@[<2>Abstracting as %a formula @,%a@]@," pp_term name pp_term t;
-              let newvars = name      ::(List.append SubGame.top_level.newvars state.newvars) in
+              let newvars = name::selector::(List.append SubGame.top_level.newvars state.newvars) in
               let foralls = newforall ::(List.append SubGame.top_level.foralls state.foralls) in
               let namings = newnaming ::(List.append SubGame.namings state.namings) in
               name, { newvars; foralls; namings }
@@ -273,8 +273,7 @@ module SolverState = struct
     val existentials : Term.t list
     val over  : Term.t list ref (* Models of the game satify ground /\ /\over *)
     val under : Term.t list ref (* Models of ground /\ \/under satisfy the game *)
-    val context_over  : Context.t
-    val context_under : Context.t
+    val context  : Context.t
   end
 
   type t = (module T)
@@ -290,12 +289,9 @@ module SolverState = struct
       (ppl ~prompt:"Over-approximation (\"Learnt\"): conjunction of" pp_term) !over
       (ppl ~prompt:"Under-approximation: disjunction of" pp_term) !under
 
-  let pp_log x fmt (module T:T) =
+  let pp_log fmt (module T:T) =
     let open T in
-    let log = match x with
-      | `over -> Context.to_sexp context_over
-      | `under -> Context.to_sexp context_under
-    in
+    let log = Context.to_sexp context in
     let intro sofar t =
       let typ = Term.type_of_term t in
       let sexp = List[Atom "declare-fun"; Term.to_sexp t; List[]; Type.to_sexp typ] in
@@ -313,19 +309,14 @@ module SolverState = struct
     let universals = List.map (fun (_,trigger,form) -> Term.(trigger ==> form)) namings
     let over   = ref []
     let under  = ref []
-    let context_over = Context.malloc ~config ()
-    let context_under = Context.malloc ~config ()
-    let () = Context.assert_formula context_over ground
-    let () = Context.assert_formula context_under ground
-    let () = Context.assert_formulas context_over existentials
-    let () = Context.assert_formulas context_under existentials
-    let () = Context.assert_formulas context_over universals
-    let () = Context.assert_formulas context_under universals
+    let context = Context.malloc ~config ()
+    let () = Context.assert_formula context ground
+    let () = Context.assert_formulas context existentials
+    let () = Context.assert_formulas context universals
   end : T)
 
   let free (module G : T) =
-    Context.free G.context_over;
-    Context.free G.context_under;
+    Context.free G.context;
     Level.free G.top_level
   
 end
@@ -350,6 +341,7 @@ type answer =
 
 exception BadInterpolant of SolverState.t * Level.t * Term.t
 exception FromYicesException of SolverState.t * Level.t * Types.error_report
+exception WrongAnswer of SolverState.t * answer
 
 let sat_answer (module S:SolverState.T) level model reason =
   let open S in
@@ -370,14 +362,14 @@ let rec solve state ?selector level model = try
     
     print 4 "@[Trying to solve over-approximations@]@,";
     let status = match model.support with
-      | [] -> Context.check context_over
-      | _ -> Context.check_with_model context_over model.model model.support
+      | [] -> Context.check context
+      | _ -> Context.check_with_model context model.model model.support
     in
     match status with
     | `STATUS_UNSAT ->
       let interpolant = match model.support with
         | [] -> Term.false0()
-        | _ -> Context.get_model_interpolant context_over
+        | _ -> Context.get_model_interpolant context
       in
       if (Model.get_bool_value model.model interpolant)
       then raise (BadInterpolant(state, level, interpolant));
@@ -386,17 +378,16 @@ let rec solve state ?selector level model = try
       answer
 
     | `STATUS_SAT ->
-      let newmodel = Context.get_model context_over ~keep_subst:true in
+      let newmodel = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         SModel.pp
-        SModel.{support = List.append level.rigid level.newvars; model = newmodel }
+        SModel.{support = List.append model.support level.newvars; model = newmodel }
       ;
       let rec aux reasons = function
         | [] ->
           print 1 "@]@,";
           let reason = Term.andN reasons in
           print 4 "@[Collected reason is %a@]@," pp_term reason;
-          if not(List.is_empty reasons) then under := reason::!under;
           Sat(sat_answer state level newmodel reason)
         | o :: opponents when not (Model.get_bool_value newmodel Level.(o.name)) ->
           print 4 "@[Level %i does not need to be looked at as %a is false@]@,"
@@ -431,7 +422,7 @@ let rec solve state ?selector level model = try
               | Some s -> Term.(s ==> learnt)
               | None -> learnt
             in
-            Context.assert_formula context_over learnt;
+            Context.assert_formula context learnt;
             print 1 "@]@,";
             print 4 "@[<2>Learnt clause:@,%a@]@," pp_term learnt;
             over := learnt::!over;
@@ -507,10 +498,12 @@ let treat filename =
           let str = match answer, !expected with
             | Unsat _, None -> "unsat?"
             | Sat _, None -> "sat?"
-            | Unsat _, Some true -> "unsat!!!!!!!"
-            | Sat _, Some false -> "sat!!!!!!!"
             | Unsat _, Some false -> "unsat!"
             | Sat _, Some true -> "sat!"
+            | Unsat _, Some true 
+            | Sat _, Some false ->
+              Format.(fprintf stderr) "@[Wrong answer!: %a@]@," pp_answer answer;
+              raise (WrongAnswer(initial_state, answer))
           in
           Format.(fprintf stdout) "@[%s@]@," str;
           (* SolverState.free initial_state; *)
@@ -529,18 +522,15 @@ let treat filename =
   print 1 "@[Exited gracefully@]@,"
 
 
-let print_file filename destination x state =
+let print_file filename destination state =
   match !filedump with
   | None -> ()
   | Some prefix ->
     let newfile = Filename.(filename |> remove_extension |> basename) in
-    let newfile = match x with
-      | `over  -> newfile^".over.smt2"
-      | `under -> newfile^".under.smt2"
-    in
+    let newfile = newfile^".trace.smt2" in
     let newfile = Filename.(newfile |> concat destination |> concat prefix) in
     Format.(fprintf stdout) "%s@,%!" ("Writing log to "^newfile);
-    Format.to_file newfile "@[<v>%a@]" (SolverState.pp_log x) state
+    Format.to_file newfile "@[<v>%a@]" SolverState.pp_log state
 
 let copy_file filename destination =
   match !filedump with
@@ -578,15 +568,14 @@ match !args with
      Format.(fprintf stdout) "@]%!";
    with
    | BadInterpolant(state, level, interpolant) as exc ->
-     print_file filename "bad_interpolant" `over state;
+     print_file filename "bad_interpolant" state;
      copy_file filename "bad_interpolant";
      Format.(fprintf stdout) "Interpolant at level %i:@,%a@," level.Level.id Term.pp interpolant;
      Format.(fprintf stdout) "@]%!";
      raise exc
 
    | FromYicesException(state, level, report) as exc ->
-     print_file filename "yices_exc" `over state;
-     print_file filename "yices_exc" `under state;
+     print_file filename "yices_exc" state;
      copy_file filename "yices_exc";
      Format.(fprintf stdout) "@[Yices error at level %i: @[%s@]@]@,"
        level.Level.id
