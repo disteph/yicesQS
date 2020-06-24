@@ -7,6 +7,7 @@ open Yices2_SMT2
 
 let verbosity = ref 0
 let filedump  = ref None
+let underapprox = ref 1
 
 let print i fs = Format.((if !verbosity >= i then fprintf else ifprintf) stdout) fs
 
@@ -18,6 +19,8 @@ let ppl ~prompt pl fmt l = match l with
               (List.pp pl) l
 
 let pp_term fmt t = t |> Term.to_sexp |> pp_sexp fmt
+
+type subst = (Term.t * Term.t) list
 
 module HType = Hashtbl.Make(Type)
 module HTerm = Hashtbl.Make(Term)
@@ -120,8 +123,6 @@ module Game = struct
   (* Monadic fold and map *)
   module MList = MList(StateMonad)
   include MTerm(StateMonad)
-
-  type subst = (Term.t * Term.t) list
 
   let var_add newvar a state =
     let newvars = newvar::state.newvars in
@@ -289,9 +290,8 @@ module SolverState = struct
       (ppl ~prompt:"Over-approximation (\"Learnt\"): conjunction of" pp_term) !over
       (ppl ~prompt:"Under-approximation: disjunction of" pp_term) !under
 
-  let pp_log fmt (module T:T) =
+  let pp_log_raw fmt ((module T:T),log) =
     let open T in
-    let log = Context.to_sexp context in
     let intro sofar t =
       let typ = Term.type_of_term t in
       let sexp = List[Atom "declare-fun"; Term.to_sexp t; List[]; Type.to_sexp typ] in
@@ -303,6 +303,11 @@ module SolverState = struct
     let option = List[Atom "set-option"; Atom ":produce-unsat-model-interpolants"; Atom "true"] in
     Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" pp_sexp) (option::sl::log)
 
+  let pp_log fmt ((module T:T) as state) =
+    let open T in
+    let log = Context.to_sexp context in
+    pp_log_raw fmt (state,log)
+    
   let create config (module G : Game.T) = (module struct
     include G
     let existentials = List.map (fun (u,_,form) -> Term.(u ||| form)) namings
@@ -321,6 +326,32 @@ module SolverState = struct
   
 end
 
+module LazyList = struct
+
+  type 'a t = [`Nil | `Cons of 'a * 'a t] Lazy.t
+
+  let empty = lazy `Nil
+  let singleton a = lazy (`Cons(a,empty))
+
+  let rec map f l = lazy (match Lazy.force l with
+      | `Nil -> `Nil
+      | `Cons(head,tail) -> `Cons(f head, map f tail))
+    
+  let rec concat s1 s2 = lazy(
+    match Lazy.force s1 with
+    | `Nil -> Lazy.force s2
+    | `Cons(head, tail ) -> `Cons(head, concat tail s2))
+
+  let rec extract n l =
+    if n <= 0 then []
+    else
+      match Lazy.force l with
+      | `Nil -> []
+      | `Cons(head,tail) -> head::(extract (n-1) tail)
+
+end
+
+
 (* Output for the next function.
    When calling 
      solve game base_support model
@@ -329,31 +360,59 @@ end
    - If the call outputs Unsat f, it means:
    here is a formula f whose uninterpreted constants are in base_support,
    that is satisfied by model, and that is inconsistent with game.
-   - If the call outputs Sat f, it means:
-   here is a formula f whose uninterpreted constants are in base_support,
-   that is satisfied by model, and that implies game.
+   - If the call outputs Sat l, it means:
+   each formula f in the list of formulae f has its uninterpreted constants in base_support,
+   is satisfied by model, and implies game.
 *)
 
 type answer =
   | Unsat of Term.t
-  | Sat of Term.t
+  | Sat of Term.t list
 [@@deriving show { with_path = false }]
 
 exception BadInterpolant of SolverState.t * Level.t * Term.t
 exception FromYicesException of SolverState.t * Level.t * Types.error_report
 exception WrongAnswer of SolverState.t * answer
 
-let sat_answer (module S:SolverState.T) level model reason =
-  let open S in
-  print 4 "@[<2>true of model is@ @[<v>%a@]@]@," pp_term reason;
-  let true_of_model = Term.(Level.(level.ground) &&& reason) in
-  let gen_model =
-    Model.generalize_model model true_of_model Level.(level.newvars) `YICES_GEN_DEFAULT
+module THash = Hashtbl.Make'(Term)
+    
+let build_table model oldvar newvar =
+  let tbl = THash.create (List.length newvar * 10) in
+  let treat_new var =
+    let value = Model.get_value_as_term model var in
+    match THash.find_opt tbl value with
+    | Some _ -> ()
+    | None   -> THash.add tbl value []
   in
-  let answer = Term.(andN gen_model) in
-  print 3 "@[<2>Level %i answer on that model is SAT because@ @[%a@]@]" level.Level.id pp_term answer;
-  answer
+  List.iter treat_new newvar;
+  let treat_old var =
+    let value = Model.get_value_as_term model var in
+    match THash.find_opt tbl value with
+    | Some l -> THash.replace tbl value (var::l)
+    | None   -> ()
+  in
+  List.iter treat_old oldvar;
+  tbl
 
+  
+let generalize_model model formula oldvar newvar : Term.t LazyList.t =
+  let tbl = build_table model oldvar newvar in
+  let rec aux1 list : subst LazyList.t = match list with
+    | []      -> LazyList.singleton []
+    | (var, value, terms)::other_vars ->
+      let rest = aux1 other_vars in
+      let rec aux2 = function
+        | []    -> LazyList.map (fun subst -> (var,value)::subst) rest
+        | t::tl -> LazyList.concat (LazyList.map (fun subst -> (var,t)::subst) rest) (aux2 tl) 
+      in
+      aux2 terms
+  in
+  let aux var =
+    let value = Model.get_value_as_term model var in
+    var, value, THash.find tbl value
+  in
+  let substs = newvar |> List.map aux |> aux1 in
+  LazyList.map (fun subst -> Term.subst_term subst formula) substs  
 
 let rec solve state ?selector level model = try
     let (module S:SolverState.T) = state in
@@ -373,6 +432,9 @@ let rec solve state ?selector level model = try
       in
       if (Model.get_bool_value model.model interpolant)
       then raise (BadInterpolant(state, level, interpolant));
+      if Term.(equal interpolant (false0()))
+      && not(Types.equal_smt_status (Context.check context) `STATUS_UNSAT)
+      then raise (BadInterpolant(state, level, interpolant));
       let answer = Unsat Term.(not1 interpolant) in
       print 3 "@[<2>Level %i answer on that model is@ @[%a@]@]" level.id pp_answer answer;
       answer
@@ -381,14 +443,21 @@ let rec solve state ?selector level model = try
       let newmodel = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         SModel.pp
-        SModel.{support = List.append level.newvars model.support; model = newmodel }
-      ;
+        SModel.{support = List.append level.newvars model.support; model = newmodel };
       let rec aux reasons = function
         | [] ->
           print 1 "@]@,";
           let reason = Term.andN reasons in
           print 4 "@[Collected reason is %a@]@," pp_term reason;
-          Sat(sat_answer state level newmodel reason)
+          let true_of_model = Term.(Level.(level.ground) &&& reason) in
+          print 4 "@[<2>true of model is@ @[<v>%a@]@]@," pp_term true_of_model;
+          let seq =
+            generalize_model newmodel true_of_model model.support Level.(level.newvars)
+          in
+          let underapprox = LazyList.extract !underapprox seq in
+          let answer = Sat underapprox in
+          print 3 "@[<2>Level %i answer on that model is@ @[%a@]@]" level.id pp_answer answer;
+          answer
         | o :: opponents when not (Model.get_bool_value newmodel Level.(o.name)) ->
           print 4 "@[Level %i does not need to be looked at as %a is false@]@,"
             o.sublevel.id
@@ -413,15 +482,19 @@ let rec solve state ?selector level model = try
               Model.generalize_model newmodel.model reason [o.name;o.selector] `YICES_GEN_DEFAULT
             in
             aux (List.append gen_model reasons) opponents
-          | Sat reason ->
-            let gen_model =
-              Model.generalize_model newmodel.model reason [o.name] `YICES_GEN_DEFAULT
+          | Sat reasons ->
+            assert(List.length reasons > 0);
+            let aux reason =
+              let gen_model =
+                Model.generalize_model newmodel.model reason [o.name] `YICES_GEN_DEFAULT
+              in
+              let learnt = Term.(o.name ==> not1 (andN gen_model)) in
+              Context.assert_formula context learnt;
+              print 1 "@]@,";
+              print 4 "@[<2>Learnt clause:@,%a@]@," pp_term learnt;
+              over := learnt::!over
             in
-            let learnt = Term.(o.name ==> not1 (andN gen_model)) in
-            Context.assert_formula context learnt;
-            print 1 "@]@,";
-            print 4 "@[<2>Learnt clause:@,%a@]@," pp_term learnt;
-            over := learnt::!over;
+            List.iter aux reasons;
             solve state ?selector level model
       in
       print 1 "@[<v 1> ";
@@ -484,9 +557,7 @@ let treat filename =
           in
           print 3 "@[<v 1>Computed game is:@,@[%a@]@]@," Game.pp game;
           print 2 "@]@,";
-          let _status    = Context.check env.context in
-          let emptymodel = Context.get_model env.context ~keep_subst:true in
-          let emptymodel = SModel.{ support = []; model = emptymodel } in
+          let emptymodel = SModel.{ support = []; model = Model.from_map [] } in
           let initial_state = SolverState.create session.config game in
           print 1 "@[<v>";
           let answer = solve initial_state G.top_level emptymodel in
@@ -497,9 +568,7 @@ let treat filename =
             | Unsat _, Some false -> "unsat!"
             | Sat _, Some true -> "sat!"
             | Unsat _, Some true 
-            | Sat _, Some false ->
-              Format.(fprintf stderr) "@[Wrong answer!: %a@]@," pp_answer answer;
-              raise (WrongAnswer(initial_state, answer))
+            | Sat _, Some false -> raise (WrongAnswer(initial_state, answer))
           in
           Format.(fprintf stdout) "@[%s@]@," str;
           (* SolverState.free initial_state; *)
@@ -551,6 +620,7 @@ let description = "QE in Yices"
 
 let options = [
   ("-verb",     Int(fun i -> verbosity := i), "Verbosity level (default is 0)");
+  ("-under",    Int(fun u -> underapprox := u), "Desired number of underapproximations in SAT answers (default is 1)");
   ("-filedump", String(fun s -> filedump := Some s), "Dump file in case of error: if so, give path prefix (default is no file dump)");
 ];;
 
@@ -563,10 +633,35 @@ match !args with
      treat filename;
      Format.(fprintf stdout) "@]%!";
    with
-   | BadInterpolant(state, level, interpolant) as exc ->
-     print_file filename "bad_interpolant" state;
-     copy_file filename "bad_interpolant";
-     Format.(fprintf stdout) "Interpolant at level %i:@,%a@," level.Level.id Term.pp interpolant;
+   | BadInterpolant((module S : SolverState.T) as state, level, interpolant) as exc ->
+     let destination = "bad_interpolant" in
+     print_file filename destination state;
+     copy_file filename destination;
+     begin
+       match !filedump with
+       | None -> ()
+       | Some prefix ->
+         let newfile = Filename.(filename |> remove_extension |> basename) in
+         let newfile = newfile^".interpolant_check.smt2" in
+         let newfile = Filename.(newfile |> concat destination |> concat prefix) in
+         Format.(fprintf stdout) "%s@,%!" ("Writing interpolant-check to "^newfile);
+         let rec aux = function
+           | [check_with_model;_] -> [check_with_model]
+           | _::tail -> aux tail
+           | _ -> assert false
+         in
+         let log = Context.to_sexp S.context |> aux in
+         let log = Action.(AssertFormula interpolant |> to_sexp log) in 
+         Format.to_file newfile "@[<v>%a@]" SolverState.pp_log_raw (state,log)
+     end;
+     Format.(fprintf stdout) "Interpolant:@,%a@," pp_term interpolant;
+     Format.(fprintf stdout) "@]%!";
+     raise exc
+
+   | WrongAnswer(state, answer) as exc ->
+     print_file filename "wrong" state;
+     copy_file filename "wrong";
+     Format.(fprintf stdout) "@[Wrong answer!: %a@]@," pp_answer answer;
      Format.(fprintf stdout) "@]%!";
      raise exc
 
