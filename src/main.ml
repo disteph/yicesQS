@@ -128,7 +128,7 @@ module Game = struct
     let newvars = newvar::state.newvars in
     a, { state with newvars }
 
-  let bound_counter = ref 0
+  let bound_counter = ref 1
 
   let fresh_bound () : string =
     let name = "y!"^string_of_int !bound_counter in
@@ -167,15 +167,7 @@ module Game = struct
 
   let counter = ref 0
 
-  let fa_counter = ref 0
-
-  let fresh_placeholder () =
-    let name = "forall_name"^string_of_int !fa_counter in
-    incr fa_counter;
-    name
-
   let foralls_rev = HTerm.create 10
-
 
   (* rigidintro = rigid + intro *)
   let rec process config ~rigidintro ~rigid ~intro body : game =
@@ -193,8 +185,8 @@ module Game = struct
         else
           begin
             (* Creating a selector for the forall formula *)
-            let freshcount = string_of_int !fa_counter in
-            incr fa_counter;
+            incr counter;
+            let freshcount = string_of_int !counter in
             let name  = "trig"^freshcount in
             let selector = Term.new_uninterpreted ~name (Type.bool()) in
             (* Creating a name for the forall formula *)
@@ -234,7 +226,7 @@ module Game = struct
     in
     print 5 "@[<2>Traversing term@,%a@]@," pp_term body;
     let id = !counter in
-    incr counter;
+    (* incr counter; *)
     let state = { newvars = intro; foralls = []; namings = [] } in
     let ground, { newvars; foralls; namings } = aux body state in
     (module struct
