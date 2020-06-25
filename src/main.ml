@@ -363,6 +363,7 @@ type answer =
 [@@deriving show { with_path = false }]
 
 exception BadInterpolant of SolverState.t * Level.t * Term.t
+exception BadUnder of SolverState.t * Level.t * Term.t
 exception FromYicesException of SolverState.t * Level.t * Types.error_report
 exception WrongAnswer of SolverState.t * answer
 
@@ -386,7 +387,7 @@ let build_table model oldvar newvar =
   List.iter treat_old oldvar;
   tbl
 
-  
+
 let generalize_model model formula oldvar newvar : Term.t LazyList.t =
   let tbl = build_table model oldvar newvar in
   let rec aux1 list : subst LazyList.t = match list with
@@ -444,7 +445,7 @@ let rec solve state ?selector level model = try
           let true_of_model = Term.(Level.(level.ground) &&& reason) in
           print 4 "@[<2>true of model is@ @[<v>%a@]@]@," pp_term true_of_model;
           let seq =
-            generalize_model newmodel true_of_model model.support Level.(level.newvars)
+            generalize_model newmodel true_of_model Level.(level.rigid) Level.(level.newvars)
           in
           let underapprox = LazyList.extract !underapprox seq in
           let answer = Sat underapprox in
@@ -477,6 +478,8 @@ let rec solve state ?selector level model = try
           | Sat reasons ->
             assert(List.length reasons > 0);
             let aux reason =
+              if not (Model.get_bool_value newmodel.model reason)
+              then raise (BadUnder(state, level, reason));
               let gen_model =
                 Model.generalize_model newmodel.model reason [o.name] `YICES_GEN_DEFAULT
               in
@@ -647,6 +650,31 @@ match !args with
          Format.to_file newfile "@[<v>%a@]" SolverState.pp_log_raw (state,log)
      end;
      Format.(fprintf stdout) "Interpolant:@,%a@," pp_term interpolant;
+     Format.(fprintf stdout) "@]%!";
+     raise exc
+
+   | BadUnder((module S : SolverState.T) as state, level, under) as exc ->
+     let destination = "bad_under" in
+     print_file filename destination state;
+     copy_file filename destination;
+     begin
+       match !filedump with
+       | None -> ()
+       | Some prefix ->
+         let newfile = Filename.(filename |> remove_extension |> basename) in
+         let newfile = newfile^".under_check.smt2" in
+         let newfile = Filename.(newfile |> concat destination |> concat prefix) in
+         Format.(fprintf stdout) "%s@,%!" ("Writing under-check to "^newfile);
+         let rec aux = function
+           | [check_with_model;_] -> [check_with_model]
+           | _::tail -> aux tail
+           | _ -> assert false
+         in
+         let log = Context.to_sexp S.context |> aux in
+         let log = Action.(AssertFormula under |> to_sexp log) in 
+         Format.to_file newfile "@[<v>%a@]" SolverState.pp_log_raw (state,log)
+     end;
+     Format.(fprintf stdout) "Under:@,%a@," pp_term under;
      Format.(fprintf stdout) "@]%!";
      raise exc
 
