@@ -1,0 +1,6 @@
+(set-logic BV)
+(declare-fun _substvar_274_ () (_ BitVec 32))
+(declare-fun x1 () (_ BitVec 32))
+(assert (or (or (= (bvmul (_ bv61 32) x1) (bvneg (_ bv18 32))) (bvsge (bvmul (_ bv91 32) x1) (_ bv58 32))) (exists ((?y1 (_ BitVec 32))) (forall ((?y2 (_ BitVec 32))) (and (forall ((?y3 (_ BitVec 32))) (not (= (bvadd (bvmul (bvneg (_ bv8 32)) ?y2) (bvmul (bvneg (_ bv45 32)) x1)) (_ bv57 32)))) (bvslt (bvadd (bvmul (bvneg (_ bv24 32)) ?y2) _substvar_274_) (_ bv37 32)))))))
+(check-sat)
+(exit)
