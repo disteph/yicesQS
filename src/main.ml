@@ -230,10 +230,7 @@ module Game = struct
     let state = { newvars = intro; foralls = []; namings = [] } in
     let ground, { newvars; foralls; namings } = aux body state in
     (module struct
-      let top_level =
-        let existentials = List.map (fun (u,_,f) -> Term.(u ||| f)) namings in
-        let ground = Term.(ground &&& andN existentials) in 
-        Level.{id; ground; rigid; newvars; foralls;}
+      let top_level = Level.{id; ground; rigid; newvars; foralls;}
       let ground = ground
       let namings = namings
     end)
@@ -303,7 +300,7 @@ module SolverState = struct
   let create config (module G : Game.T) = (module struct
     include G
     let existentials = List.map (fun (u,_,form) -> Term.(u ||| form)) namings
-    let universals = List.map (fun (_,trigger,form) -> Term.(trigger ==> form)) namings
+    let universals   = List.map (fun (_,trigger,form) -> Term.(trigger === form)) namings
     let over   = ref []
     let under  = ref []
     let context = Context.malloc ~config ()
