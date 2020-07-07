@@ -78,7 +78,9 @@ module Game = struct
 
   module type T = sig
     val ground    : Term.t (* Ground abstraction of the game, as a quantifier-free formula *)
-    val namings   : (Term.t * Term.t * Term.t) list
+    (* val namings   : (Term.t * Term.t * Term.t) list *)
+    val existentials : Term.t list
+    val universals   : Term.t list
     val top_level : Level.t
   end
 
@@ -87,18 +89,19 @@ module Game = struct
 
   let pp fmt (module T:T) =
     let open T in
-    let pp_naming fmt (u,trigger,formula) =
-      Format.fprintf fmt "@[<2>%a standing for@ %a@]"
-        pp_term u
-        pp_term formula
-    in
+    (* let pp_naming fmt (u,trigger,formula) =
+     *   Format.fprintf fmt "@[<2>%a standing for@ %a@]"
+     *     pp_term u
+     *     pp_term formula
+     * in *)
     Format.fprintf fmt "@[<v>\
                         @[<2>Ground:@ %a@]@,\
-                        @[<2>Namings:@ @[<v>%a@]@]@,\
+                        @[<2>Existentials:@ @[<v>%a@]@]@,\
                         @[<v 2>Levels:@,%a@]\
                         @]"
       pp_term ground
-      (List.pp ~sep:"" pp_naming) namings
+      (* (List.pp ~sep:"" pp_naming) namings *)
+      (List.pp ~sep:"" pp_term) existentials
       Level.pp top_level
 
   (* The encoding of a formula into a game is done with a state monad,
@@ -107,7 +110,9 @@ module Game = struct
   type state = {
     newvars : Term.t list;
     foralls : Level.forall list;
-    namings : (Term.t * Term.t * Term.t) list
+    existentials : Term.t list;
+    universals   : Term.t list
+    (* namings : (Term.t * Term.t * Term.t) list *)
   }
 
   (* The state monad *)
@@ -211,13 +216,16 @@ module Game = struct
             let newforall =
               Level.{ name; selector; selector_context; sublevel = SubGame.top_level }
             in
-            let newnaming = name, selector, SubGame.ground in
+            (* let newnaming = name, selector, SubGame.ground in *)
+            let existential = Term.(name ||| SubGame.ground) in
+            let universal   = Term.(selector ==> SubGame.ground) in
             fun state ->
               print 5 "@[<2>Abstracting as %a formula @,%a@]@," pp_term name pp_term t;
               let newvars = List.append SubGame.top_level.newvars (name::selector::state.newvars) in
               let foralls = List.append SubGame.top_level.foralls (newforall::state.foralls) in
-              let namings = List.append SubGame.namings           (newnaming::state.namings) in
-              name, { newvars; foralls; namings }
+              let existentials = List.append SubGame.existentials (existential::state.existentials) in
+              let universals   = List.append SubGame.universals   (universal::state.universals) in
+              name, { newvars; foralls; existentials; universals }
           end
       | Bindings { c = `YICES_LAMBDA_TERM } -> raise(CannotTreat t)
       | A0 _ -> return t
@@ -227,12 +235,14 @@ module Game = struct
     print 5 "@[<2>Traversing term@,%a@]@," pp_term body;
     let id = !counter in
     (* incr counter; *)
-    let state = { newvars = intro; foralls = []; namings = [] } in
-    let ground, { newvars; foralls; namings } = aux body state in
+    let state = { newvars = intro; foralls = []; existentials = []; universals = []; (* namings = [] *) } in
+    let ground, { newvars; foralls; existentials; universals } = aux body state in
     (module struct
-      let top_level = Level.{id; ground; rigid; newvars; foralls;}
+      let top_level = Level.{id; ground = Term.andN (ground::existentials); rigid; newvars; foralls;}
       let ground = ground
-      let namings = namings
+      let existentials = existentials
+      let universals = universals
+      (* let namings = namings *)
     end)
 end
 
@@ -299,8 +309,8 @@ module SolverState = struct
     
   let create config (module G : Game.T) = (module struct
     include G
-    let existentials = List.map (fun (u,_,form) -> Term.(u ||| form)) namings
-    let universals   = List.map (fun (_,trigger,form) -> Term.(trigger === form)) namings
+    (* let existentials = List.map (fun (u,trigger,form) -> Term.(u ||| form)) namings
+     * let universals   = List.map (fun (_,trigger,form) -> Term.(trigger === form)) namings *)
     let over   = ref []
     let under  = ref []
     let context = Context.malloc ~config ()
