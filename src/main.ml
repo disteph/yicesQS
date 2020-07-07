@@ -218,7 +218,7 @@ module Game = struct
             in
             (* let newnaming = name, selector, SubGame.ground in *)
             let existential = Term.(name ||| SubGame.ground) in
-            let universal   = Term.(selector ==> SubGame.ground) in
+            let universal   = Term.(selector === SubGame.ground) in
             fun state ->
               print 5 "@[<2>Abstracting as %a formula @,%a@]@," pp_term name pp_term t;
               let newvars = List.append SubGame.top_level.newvars (name::selector::state.newvars) in
@@ -467,28 +467,36 @@ let rec solve state ?selector level model = try
           print 4 "@[Level %i needs to be looked at as %a is true@]@,"
             o.sublevel.id
             pp_term o.name;
+          (* First, we extend the model by setting the selector to true *)
           let status =
             Context.check_with_model o.selector_context newmodel o.sublevel.rigid
           in
+          (* This should always work *)
           assert(Types.equal_smt_status status `STATUS_SAT);
+          (* This is the extended model *)
           let newmodel = Context.get_model o.selector_context ~keep_subst:true in
+          (* ...with the selector in its support *)
           let support  = o.selector :: o.sublevel.rigid in
           let newmodel = SModel.{ support; model = newmodel } in
+          (* We call ourselves recursively *)
           let recurs   = solve state ~selector:o.selector o.sublevel newmodel in
           match recurs with
           | Unsat reason ->
             print 1 "@,";
+            (* We substitute o.name by true in case it appears in the reason (is it possible?) *)
             let gen_model =
               Model.generalize_model newmodel.model reason [o.name;o.selector] `YICES_GEN_DEFAULT
             in
+            (* we add the reason and continue with the next opponents *)
             aux (List.append gen_model reasons) opponents
           | Sat reasons ->
             assert(List.length reasons > 0);
             let aux reason =
               if not (Model.get_bool_value newmodel.model reason)
               then raise (BadUnder(state, level, reason));
+              (* We substitute o.name by true in case it appears in the reasons (is it possible?) *)
               let gen_model =
-                Model.generalize_model newmodel.model reason [o.name] `YICES_GEN_DEFAULT
+                Model.generalize_model newmodel.model reason [o.name;o.selector] `YICES_GEN_DEFAULT
               in
               let learnt = Term.(o.name ==> not1 (andN gen_model)) in
               Context.assert_formula context learnt;
