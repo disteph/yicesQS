@@ -76,7 +76,6 @@ module Game = struct
 
   module type T = sig
     val ground    : Term.t (* Ground abstraction of the game, as a quantifier-free formula *)
-    (* val namings   : (Term.t * Term.t * Term.t) list *)
     val existentials : Term.t list
     val universals   : Term.t list
     val top_level : Level.t
@@ -87,18 +86,12 @@ module Game = struct
 
   let pp fmt (module T:T) =
     let open T in
-    (* let pp_naming fmt (u,trigger,formula) =
-     *   Format.fprintf fmt "@[<2>%a standing for@ %a@]"
-     *     pp_term u
-     *     pp_term formula
-     * in *)
     Format.fprintf fmt "@[<v>\
                         @[<2>Ground:@ %a@]@,\
                         @[<2>Existentials:@ @[<v>%a@]@]@,\
                         @[<v 2>Levels:@,%a@]\
                         @]"
       pp_term ground
-      (* (List.pp ~sep:"" pp_naming) namings *)
       (List.pp ~sep:"" pp_term) existentials
       Level.pp top_level
 
@@ -110,7 +103,6 @@ module Game = struct
     foralls : Level.forall list;
     existentials : Term.t list;
     universals   : Term.t list
-    (* namings : (Term.t * Term.t * Term.t) list *)
   }
 
   (* The state monad *)
@@ -214,7 +206,6 @@ module Game = struct
             let newforall =
               Level.{ name; selector; selector_context; sublevel = SubGame.top_level }
             in
-            (* let newnaming = name, selector, SubGame.ground in *)
             let existential = Term.(name ||| SubGame.ground) in
             let universal   = Term.(selector === SubGame.ground) in
             fun state ->
@@ -232,7 +223,6 @@ module Game = struct
     in
     print 5 "@[<2>Traversing term@,%a@]@," pp_term body;
     let id = !counter in
-    (* incr counter; *)
     let state = { newvars = intro; foralls = []; existentials = []; universals = []; (* namings = [] *) } in
     let ground, { newvars; foralls; existentials; universals } = aux body state in
     (module struct
@@ -240,7 +230,6 @@ module Game = struct
       let ground = ground
       let existentials = existentials
       let universals = universals
-      (* let namings = namings *)
     end)
 end
 
@@ -307,8 +296,6 @@ module SolverState = struct
     
   let create config (module G : Game.T) = (module struct
     include G
-    (* let existentials = List.map (fun (u,trigger,form) -> Term.(u ||| form)) namings
-     * let universals   = List.map (fun (_,trigger,form) -> Term.(trigger === form)) namings *)
     let over   = ref []
     let under  = ref []
     let context = Context.malloc ~config ()
@@ -432,28 +419,28 @@ let rec solve state level model support : answer = try
         | [] -> Term.false0()
         | _ -> Context.get_model_interpolant context
       in
-      if (Model.get_bool_value model interpolant)
-      then raise (BadInterpolant(state, level, interpolant));
-      if Term.(equal interpolant (false0()))
-      && not(Types.equal_smt_status (Context.check context) `STATUS_UNSAT)
-      then raise (BadInterpolant(state, level, interpolant));
+      (* if (Model.get_bool_value model interpolant)
+       * then raise (BadInterpolant(state, level, interpolant));
+       * if Term.(equal interpolant (false0()))
+       * && not(Types.equal_smt_status (Context.check context) `STATUS_UNSAT)
+       * then raise (BadInterpolant(state, level, interpolant)); *)
       let answer = Unsat Term.(not1 interpolant) in
       print 3 "@[<2>Level %i answer on that model is@ @[%a@]@]" level.id pp_answer answer;
       answer
 
     | `STATUS_SAT ->
-      let newmodel = Context.get_model context ~keep_subst:true in
+      let model = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         SModel.pp SModel.{support = List.append level.newvars support; model };
-      post_process state level model support newmodel
+      post_process state level model support
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
   with
     ExceptionsErrorHandling.YicesException(_,report) ->
     raise (FromYicesException(state, level,report))
 
-and post_process state level model support newmodel =
-  match treat_sat state level newmodel support with
+and post_process state level model support =
+  match treat_sat state level model support with
   | Some underapprox -> Sat underapprox
   | None -> solve state level model support
 
@@ -505,7 +492,7 @@ and treat_sat state level model support =
 
       let recurs, model =
         if Model.get_bool_value model o.selector
-        then post_process state o.sublevel model support model, model
+        then post_process state o.sublevel model support, model
         else
         (* We extend the model by setting the selector to true *)
         let status =
