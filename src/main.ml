@@ -414,23 +414,27 @@ let generalize_model model formula oldvar newvar : Term.t LazyList.t =
   let substs = newvar |> List.map aux |> aux1 in
   LazyList.map (fun subst -> Term.subst_term subst formula) substs  
 
-let rec solve state ?selector level model = try
+
+let rec solve state level model support : answer = try
     let (module S:SolverState.T) = state in
     let open S in
-    print 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@," Level.pp level SModel.pp model;
-    
+    print 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
+      Level.pp level
+      SModel.pp { model; support };
+
     print 4 "@[Trying to solve over-approximations@]@,";
-    let status = match model.support with
+    let status = match support with
       | [] -> Context.check context
-      | _ -> Context.check_with_model context model.model model.support
+      | _  -> Context.check_with_model context model support
     in
     match status with
+
     | `STATUS_UNSAT ->
-      let interpolant = match model.support with
+      let interpolant = match support with
         | [] -> Term.false0()
         | _ -> Context.get_model_interpolant context
       in
-      if (Model.get_bool_value model.model interpolant)
+      if (Model.get_bool_value model interpolant)
       then raise (BadInterpolant(state, level, interpolant));
       if Term.(equal interpolant (false0()))
       && not(Types.equal_smt_status (Context.check context) `STATUS_UNSAT)
@@ -442,78 +446,123 @@ let rec solve state ?selector level model = try
     | `STATUS_SAT ->
       let newmodel = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
-        SModel.pp
-        SModel.{support = List.append level.newvars model.support; model = newmodel };
-      let rec aux reasons = function
-        | [] ->
-          print 1 "@]@,";
-          let reason = Term.andN reasons in
-          print 4 "@[Collected reason is %a@]@," pp_term reason;
-          let true_of_model = Term.(Level.(level.ground) &&& reason) in
-          print 4 "@[<2>true of model is@ @[<v>%a@]@]@," pp_term true_of_model;
-          let seq =
-            generalize_model newmodel true_of_model Level.(level.rigid) Level.(level.newvars)
-          in
-          let underapprox = LazyList.extract !underapprox seq in
-          let answer = Sat underapprox in
-          print 3 "@[<2>Level %i answer on that model is@ @[%a@]@]" level.id pp_answer answer;
-          answer
-        | o :: opponents when not (Model.get_bool_value newmodel Level.(o.name)) ->
-          print 4 "@[Level %i does not need to be looked at as %a is false@]@,"
-            o.sublevel.id
-            pp_term o.name;
-          aux (Term.not1 o.name::reasons) opponents
-        | o :: opponents ->
-          print 4 "@[Level %i needs to be looked at as %a is true@]@,"
-            o.sublevel.id
-            pp_term o.name;
-          (* First, we extend the model by setting the selector to true *)
-          let status =
-            Context.check_with_model o.selector_context newmodel o.sublevel.rigid
-          in
-          (* This should always work *)
-          assert(Types.equal_smt_status status `STATUS_SAT);
-          (* This is the extended model *)
-          let newmodel = Context.get_model o.selector_context ~keep_subst:true in
-          (* ...with the selector in its support *)
-          let support  = o.selector :: o.sublevel.rigid in
-          let newmodel = SModel.{ support; model = newmodel } in
-          (* We call ourselves recursively *)
-          let recurs   = solve state ~selector:o.selector o.sublevel newmodel in
-          match recurs with
-          | Unsat reason ->
-            print 1 "@,";
-            (* We substitute o.name by true in case it appears in the reason (is it possible?) *)
-            let gen_model =
-              Model.generalize_model newmodel.model reason [o.name;o.selector] `YICES_GEN_DEFAULT
-            in
-            (* we add the reason and continue with the next opponents *)
-            aux (List.append gen_model reasons) opponents
-          | Sat reasons ->
-            assert(List.length reasons > 0);
-            let aux reason =
-              if not (Model.get_bool_value newmodel.model reason)
-              then raise (BadUnder(state, level, reason));
-              (* We substitute o.name by true in case it appears in the reasons (is it possible?) *)
-              let gen_model =
-                Model.generalize_model newmodel.model reason [o.name;o.selector] `YICES_GEN_DEFAULT
-              in
-              let learnt = Term.(o.name ==> not1 (andN gen_model)) in
-              Context.assert_formula context learnt;
-              print 1 "@]@,";
-              print 4 "@[<2>Learnt clause:@,%a@]@," pp_term learnt;
-              over := learnt::!over
-            in
-            List.iter aux reasons;
-            solve state ?selector level model
-      in
-      print 1 "@[<v 1> ";
-      let result = aux [] level.foralls in
-      result
+        SModel.pp SModel.{support = List.append level.newvars support; model };
+      post_process state level model support newmodel
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
+
   with
     ExceptionsErrorHandling.YicesException(_,report) ->
     raise (FromYicesException(state, level,report))
+
+and post_process state level model support newmodel =
+  match treat_sat state level newmodel support with
+  | Some underapprox -> Sat underapprox
+  | None -> solve state level model support
+
+and treat_sat state level model support =
+  let (module S:SolverState.T) = state in
+  let open S in
+
+  (* Now we look at each forall formula that we have to satisfy, one by one *)
+  let rec aux reasons = function
+
+    (* We have satisfied all forall formulae; our model is good! *)
+    | [] ->
+      print 1 "@]@,";
+      (* We first aggregate the reasons why our model worked *)
+      let reason = Term.andN reasons in
+      print 4 "@[Collected reason is %a@]@," pp_term reason;
+      (* Any model satisfying true_of_model would have been a good model *)
+      let true_of_model = Term.(Level.(level.ground) &&& reason) in
+      print 4 "@[<2>true of model is@ @[<v>%a@]@]@," pp_term true_of_model;
+      (* Now compute several projections of the reason on the rigid variables *)
+      let seq =
+        generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
+      in
+      let underapprox = LazyList.extract !underapprox seq in
+      print 3 "@[<v2>Level %i model works, with reason@,@[<v2>  %a@]@]"
+        level.id
+        (List.pp pp_term)
+        underapprox;
+      Some underapprox
+
+    (* Here we have a forall formula o that is false in the model;
+       the reason why we don't have to look at it is that o is false in the model. *)
+    | o :: opponents when not (Model.get_bool_value model Level.(o.name)) ->
+      print 4 "@[Level %i does not need to be looked at as %a is false@]@,"
+        o.sublevel.id
+        pp_term o.name;
+      aux (Term.not1 o.name::reasons) opponents
+
+    (* Here we have a forall formula o that is true in the model;
+       we have to make a recursive call to play the corresponding sub-game *)
+    | o :: opponents ->
+      print 4 "@[Level %i needs to be looked at as %a is true@]@,"
+        o.sublevel.id
+        pp_term o.name;
+
+      let open Level in
+
+      let support = o.selector::o.sublevel.rigid in
+
+      let recurs, model =
+        if Model.get_bool_value model o.selector
+        then post_process state o.sublevel model support model, model
+        else
+        (* We extend the model by setting the selector to true *)
+        let status =
+          Context.check_with_model o.selector_context model o.sublevel.rigid
+        in
+        (* This should always work *)
+        assert(Types.equal_smt_status status `STATUS_SAT);
+        (* This is the extended model *)
+        let model = Context.get_model o.selector_context ~keep_subst:true in
+        solve state o.sublevel model support, model
+
+      in
+      (* We call ourselves recursively *)
+      match recurs with
+      | Unsat reason ->
+        print 1 "@,";
+        (* We substitute o.name by true in case it appears in the reason (is it possible?) *)
+        let gen_model =
+          Model.generalize_model model reason [o.name; o.selector] `YICES_GEN_DEFAULT
+        in
+        (* we add the reason and continue with the next opponents *)
+        print 4 "@[its projection is %a@]@,"
+          (List.pp pp_term) reasons;
+        aux (List.append gen_model reasons) opponents
+      | Sat reasons ->
+        assert(List.length reasons > 0);
+        let aux reason =
+          if not (Model.get_bool_value model reason)
+          then raise (BadUnder(state, level, reason));
+          (* We substitute o.name by true in case it appears in the reasons (is it possible?) *)
+          let gen_model =
+            Model.generalize_model model reason [o.name;o.selector] `YICES_GEN_DEFAULT
+          in
+          let learnt = Term.(o.name ==> not1 (andN gen_model)) in
+          Context.assert_formula context learnt;
+          print 1 "@]@,";
+          print 4 "@[<2>Learnt clause:@,%a@]@," pp_term learnt;
+          over := learnt::!over
+        in
+        List.iter aux reasons;
+        None
+  in
+  print 1 "@[<v 1> ";
+  let result = aux [] level.foralls in
+  result
+
+(* and post_process
+ * 
+ * 
+ * 
+ * let answer = Sat underapprox in
+ *       print 3 "@[<2>Level %i answer on that model is@ @[%a@]@]" level.id pp_answer answer;
+ *       answer *)
+
+
 
 let () = assert(Global.has_mcsat())
 
@@ -567,10 +616,9 @@ let treat filename =
           in
           print 3 "@[<v 1>Computed game is:@,@[%a@]@]@," Game.pp game;
           print 2 "@]@,";
-          let emptymodel = SModel.{ support = []; model = Model.from_map [] } in
           let initial_state = SolverState.create session.config game in
           print 1 "@[<v>";
-          let answer = solve initial_state G.top_level emptymodel in
+          let answer = solve initial_state G.top_level (Model.from_map []) [] in
           print 1 "@]@,";
           let str = match answer, !expected with
             | Unsat _, None -> "unsat?"
