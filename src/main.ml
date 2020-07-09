@@ -4,10 +4,8 @@ open Type
 open Yices2_high
 open Yices2_ext_bindings
 open Yices2_SMT2
+open Command_options
 
-let verbosity = ref 0
-let filedump  = ref None
-let underapprox = ref 1
 
 let print i fs = Format.((if !verbosity >= i then fprintf else ifprintf) stdout) fs
 
@@ -394,8 +392,8 @@ let build_table model oldvar newvar =
   List.iter treat_old oldvar;
   tbl
 
-
 let generalize_model model formula oldvar newvar : Term.t LazyList.t =
+  let formula, newvar = IC.solve_all newvar formula in
   let tbl = build_table model oldvar newvar in
   let rec aux1 list : subst LazyList.t = match list with
     | []      -> LazyList.singleton []
@@ -553,15 +551,6 @@ and treat_sat state level model support =
   print 1 "@[<v 1> ";
   let result = aux [] level.foralls in
   result
-
-(* and post_process
- * 
- * 
- * 
- * let answer = Sat underapprox in
- *       print 3 "@[<2>Level %i answer on that model is@ @[%a@]@]" level.id pp_answer answer;
- *       answer *)
-
 
 
 let () = assert(Global.has_mcsat())
