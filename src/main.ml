@@ -140,24 +140,6 @@ module Game = struct
     let subst, rigid, newvars = List.fold_left aux ([], rigid, []) bound in
     Term.subst_term subst body, rigid, newvars
 
-  (* let fresh1 vars body =
-   *   let h = HType.create 10 in
-   *   let aux subst v =
-   *     let typ = Term.type_of_term v in
-   *     if HType.mem h typ
-   *     then return ((v, HType.find h typ)::subst)
-   *     else
-   *       begin
-   *         let name = fresh_bound() in
-   *         let newvar = Term.new_uninterpreted ~name typ in
-   *         HType.add h typ newvar;
-   *         var_add newvar ((v,newvar)::subst)
-   *       end
-   *   in
-   *   let+ subst = MList.fold aux (return []) vars in
-   *   return (Term.subst_term subst body) *)
-
-
   exception CannotTreat of Term.t
 
   let counter = ref 0
@@ -188,12 +170,6 @@ module Game = struct
             let name  = "name"^freshcount in
             let name  = Term.new_uninterpreted ~name (Type.bool()) in
             HTerm.add foralls_rev t name;
-            (* We instantiate the forall formula ,
-               instantiating all bound variables by the same uninterpreted term (per type)
-               this is used to produce a "lucky" instance of the formula *)
-            (* let+ substituted1 = fresh1 vars body in *)
-            (* let+ lucky_instance = aux substituted1 in *)
-            (* let t'   = Term.(uninterpreted &&& lucky_instance) in *)
             let substituted, rigidintro_sub, intro_sub = fresh rigidintro vars body in
             let (module SubGame) =
               process config
