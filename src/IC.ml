@@ -150,6 +150,7 @@ let getInverseConcat (x : Term.t) (t : Term.t) (bits : Term.t list) =
     | Extract{ extractee; lo; hi; polarity }::tail
       when lo = 0 && hi = width extractee && fv x extractee ->
       let t'  = Term.BV.bvextract t start_index (start_index + hi - 1) in
+      let t'  = if polarity then t' else Term.BV.bvnot t' in
       (extractee, t') ::  (aux (start_index + hi - lo) tail)
 
     | Extract{ lo; hi }::tail ->
