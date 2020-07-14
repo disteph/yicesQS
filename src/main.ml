@@ -5,7 +5,7 @@ open Yices2_high
 open Yices2_ext_bindings
 open Yices2_SMT2
 open Command_options
-
+open IC
 
 let print i fs = Format.((if !verbosity >= i then fprintf else ifprintf) stdout) fs
 
@@ -286,31 +286,6 @@ module SolverState = struct
   
 end
 
-module LazyList = struct
-
-  type 'a t = [`Nil | `Cons of 'a * 'a t] Lazy.t
-
-  let empty = lazy `Nil
-  let singleton a = lazy (`Cons(a,empty))
-
-  let rec map f l = lazy (match Lazy.force l with
-      | `Nil -> `Nil
-      | `Cons(head,tail) -> `Cons(f head, map f tail))
-    
-  let rec concat s1 s2 = lazy(
-    match Lazy.force s1 with
-    | `Nil -> Lazy.force s2
-    | `Cons(head, tail ) -> `Cons(head, concat tail s2))
-
-  let rec extract n l =
-    if n <= 0 then []
-    else
-      match Lazy.force l with
-      | `Nil -> []
-      | `Cons(head,tail) -> head::(extract (n-1) tail)
-
-end
-
 
 (* Output for the next function.
    When calling 
@@ -356,7 +331,7 @@ let build_table model oldvar newvar =
   tbl
 
 let generalize_model model formula oldvar newvar : Term.t LazyList.t =
-  let formula, newvar = IC.solve_all newvar formula in
+  let formula, _ = IC.solve_all newvar formula in
   let tbl = build_table model oldvar newvar in
   let rec aux1 list : subst LazyList.t = match list with
     | []      -> LazyList.singleton []
@@ -364,7 +339,7 @@ let generalize_model model formula oldvar newvar : Term.t LazyList.t =
       let rest = aux1 other_vars in
       let rec aux2 = function
         | []    -> LazyList.map (fun subst -> (var,value)::subst) rest
-        | t::tl -> LazyList.concat (LazyList.map (fun subst -> (var,t)::subst) rest) (aux2 tl) 
+        | t::tl -> LazyList.append (LazyList.map (fun subst -> (var,t)::subst) rest) (aux2 tl) 
       in
       aux2 terms
   in
