@@ -443,7 +443,10 @@ and treat_sat state level model support =
 
       let recurs, model =
         if Model.get_bool_value model o.selector
-        then post_process state o.sublevel model support, model
+        then
+          (print 4 "@[Model already makes %a true, we stick to the same model@]@,"
+             pp_term o.selector;
+           post_process state o.sublevel model support, model)
         else
         (* We extend the model by setting the selector to true *)
         let status =
@@ -461,12 +464,16 @@ and treat_sat state level model support =
       | Unsat reason ->
         print 1 "@,";
         (* We substitute o.name by true in case it appears in the reason (is it possible?) *)
+        print 4 "@[Back to level %i, we see from level %i answer Unsat with reason %a@]@,"
+          level.id
+          o.sublevel.id
+          pp_term reason;
         let gen_model =
           Model.generalize_model model reason [o.name; o.selector] `YICES_GEN_DEFAULT
         in
         (* we add the reason and continue with the next opponents *)
         print 4 "@[its projection is %a@]@,"
-          (List.pp pp_term) reasons;
+          (List.pp pp_term) gen_model;
         aux (List.append gen_model reasons) opponents
       | Sat reasons ->
         assert(List.length reasons > 0);

@@ -277,7 +277,7 @@ let rec solve
       else Substs.nonlinear subst
     with NotImplemented -> Substs.nil
   else
-    let treat e_i t' = solve_top x Types.(A2(cons, e_i, t')) polarity epsilons in
+    let treat e_i t' = solve x Types.(A2(cons, e_i, t')) polarity epsilons in
     let rec treat_nl = function
       | []             -> fun solutions -> solutions
       | (e_i,t')::tail ->
@@ -322,7 +322,7 @@ let rec solve
             let dy  = Term.subst_term [x',y] dx' in
             let b   = Term.build Types.(A2(cons,dy,t)) in
             let b   = if polarity then b else Term.not1 b in
-            solve_top x Types.(A2(`YICES_EQ_TERM, e_i, y)) true (Term.(phi ==> b)::epsilons)
+            solve x Types.(A2(`YICES_EQ_TERM, e_i, y)) true (Term.(phi ==> b)::epsilons)
           with NotImplemented -> Substs.nil
       in
       let rec aux = function
@@ -331,34 +331,54 @@ let rec solve
       in
       aux variants
 
-and solve_top
+let solve_atom
     (x : Term.t)
     (atom : [`a2] Types.composite Types.termstruct)
     (polarity : bool)
     epsilons  (* The specs of the epsilon terms we have created in the recursive solve descent *)
   =
   let Types.A2(cons,e,t) = atom in
+  print 4 "@[<2>solve_atom %a with lhs = %a and rhs = %a@]@,"
+    Term.pp x
+    Term.pp e
+    Term.pp t;
   if fv x t
   then if fv x e
     then match cons with
-      | `YICES_EQ_TERM ->
-        let zero = Term.BV.bvconst_zero ~width:(width t) in
-        solve x Types.(A2(cons,Term.BV.bvsub t e, zero)) polarity epsilons
+      | `YICES_EQ_TERM when Term.is_bitvector t || Term.is_arithmetic t ->
+        print 6 "@[<2>Present on both sides, and is bv or arith@]@,";
+        let lhs, rhs =
+          if Term.is_bitvector t
+          then Term.BV.bvsub t e, Term.BV.bvconst_zero ~width:(width t)
+          else Term.Arith.sub t e, Term.Arith.zero()
+        in
+        solve x Types.(A2(cons, lhs, rhs)) polarity epsilons
       | _ ->
+        print 6 "@[<2>Present on both sides, and is not bv or arith@]@,";
         solve x Types.(A2(cons,e,t)) polarity epsilons
         ||> solve x Types.(A2(cons,t,e)) polarity epsilons
-    else solve x Types.(A2(cons,t,e)) polarity epsilons
+    else
+      (print 6 "@[<2>Present on rhs only@]@,";
+       solve x Types.(A2(cons,t,e)) polarity epsilons)
   else
-    solve x Types.(A2(cons,e,t)) polarity epsilons
+    (print 6 "@[<2>Present on lhs only@]@,";
+     solve x Types.(A2(cons,e,t)) polarity epsilons)
 
 
 let solve_lit x lit =
   let open Term in
   let open Types in
-  let aux b t = 
-    match reveal t with
-    | Term(A2 _ as atom) when fv x t -> solve_top x atom b []
-    | _ -> Substs.nil
+  let aux b t =
+    if Term.equal x t then
+      let body = if b then Term.true0() else Term.false0() in
+      Substs.eliminate { body; epsilons = [] }
+    else
+      match reveal t with
+      | Term(A2 _ as atom) when fv x t ->
+        let r = solve_atom x atom b [] in
+        print 1 "@[<2>solve_lit turns %a into %a@]@," Term.pp lit (Substs.pp_substs x) (r []);
+        r
+      | _ -> Substs.nil
   in
   match reveal lit with
   | Term(A1(`YICES_NOT_TERM, t')) -> aux false t'
@@ -371,18 +391,18 @@ let solve_list ((l,epsilons) as le) x =
     | lit::tail -> solve_lit x lit ||> aux tail
   in
   let substitute {body ; epsilons } (l,old_epsilons) =
-    print 1 "@[<2>IC substitutes %a by %a@]@," Term.pp x Term.pp body;
+    print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
     Term.subst_terms [x,body] l, Term.subst_terms [x,body] old_epsilons @ epsilons
   in
   let results = aux l [] in
-  print 3 "@[<2>IC solves %a from %a, giving %a@]@,"
+  print 3 "@[<2>solve_list solves %a from %a, giving %a@]@,"
     Term.pp x
     (List.pp Term.pp) l
     (Substs.pp_substs x) results;
   match results with
   | Eliminate subst -> substitute subst le 
-  | NonLinear [] -> le
-  | NonLinear(subst::_) -> substitute subst le
+  | NonLinear _ -> le
+  (* | NonLinear(subst::_) -> substitute subst le *)
 
 
 let solve_all vars t =
