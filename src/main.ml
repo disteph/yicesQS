@@ -234,9 +234,7 @@ module SolverState = struct
     include Game.T
     val universals   : Term.t list
     val existentials : Term.t list
-    val over      : Term.t list ref (* Models of the game satify ground /\ /\over *)
-    val context   : Context.t
-    val ycontext  : Context.t
+    val context  : Context.t
   end
 
   type t = (module T)
@@ -245,10 +243,8 @@ module SolverState = struct
     let open T in
     Format.fprintf fmt "@[<v>\
                         @[%a@]\
-                        %a\
                         @]"
       Game.pp (module T)
-      (ppl ~prompt:"Over-approximation (\"Learnt\"): conjunction of" pp_term) !over
 
   let pp_log_raw fmt ((module T:T),log) =
     let open T in
@@ -268,17 +264,12 @@ module SolverState = struct
     let log = Context.to_sexp context in
     pp_log_raw fmt (state,log)
     
-  let create yconfig config (module G : Game.T) = (module struct
+  let create config (module G : Game.T) = (module struct
     include G
-    let over   = ref []
     let context = Context.malloc ~config ()
-    let ycontext = Context.malloc ~config ()
     let () = Context.assert_formula context ground
     let () = Context.assert_formulas context existentials
     let () = Context.assert_formulas context universals
-    let () = Context.assert_formula ycontext ground
-    let () = Context.assert_formulas ycontext existentials
-    let () = Context.assert_formulas ycontext universals
   end : T)
 
   let free (module G : T) =
@@ -361,7 +352,7 @@ let rec solve state level model support : answer = try
 
     print 4 "@[Trying to solve over-approximations@]@,";
     let status = match support with
-      | [] -> Context.check ycontext
+      | [] -> Context.check context
       | _  -> Context.check_with_model context model support
     in
     match status with
@@ -373,18 +364,15 @@ let rec solve state level model support : answer = try
       in
       if (Model.get_bool_value model interpolant)
       then raise (BadInterpolant(state, level, interpolant));
-      (* if Term.(equal interpolant (false0()))
-       * && not(Types.equal_smt_status (Context.check context) `STATUS_UNSAT)
-       * then raise (BadInterpolant(state, level, interpolant)); *)
+      if Term.(equal interpolant (false0()))
+      && not(Types.equal_smt_status (Context.check context) `STATUS_UNSAT)
+      then raise (BadInterpolant(state, level, interpolant));
       let answer = Unsat Term.(not1 interpolant) in
       print 3 "@[<2>Level %i answer on that model is@ @[%a@]@]" level.id pp_answer answer;
       answer
 
     | `STATUS_SAT ->
-      let model = match support with
-        | [] -> Context.get_model ycontext ~keep_subst:true
-        | _ -> Context.get_model context ~keep_subst:true
-      in
+      let model = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         SModel.pp SModel.{support = List.append level.newvars support; model };
       post_process state level model support
@@ -489,10 +477,8 @@ and treat_sat state level model support =
           in
           let learnt = Term.(o.name ==> not1 (andN gen_model)) in
           Context.assert_formula context learnt;
-          Context.assert_formula ycontext learnt;
           print 1 "@]@,";
           print 4 "@[<2>Learnt clause:@,%a@]@," pp_term learnt;
-          over := learnt::!over
         in
         List.iter aux reasons;
         None
@@ -509,14 +495,9 @@ let treat filename =
   let set_logic logic config =
     print 3 "@[Setting logic to %s@]@," logic;
     Config.set config ~name:"solver-type" ~value:"mcsat";
-    Config.set config ~name:"mode" ~value:"multi-checks";
-  in
-  let session = Session.create ~set_logic 0 in
-  let set_logic logic config =
-    print 3 "@[Setting logic to %s@]@," logic;
     Config.set config ~name:"mode" ~value:"multi-checks"
   in
-  let ysession = Session.create ~set_logic 0 in
+  let session = Session.create ~set_logic 0 in
   let support       = ref [] in
   let expected      = ref None in
   let assertions    = ref [] in
@@ -559,7 +540,7 @@ let treat filename =
           in
           print 3 "@[<v 1>Computed game is:@,@[%a@]@]@," Game.pp game;
           print 2 "@]@,";
-          let initial_state = SolverState.create ysession.config session.config game in
+          let initial_state = SolverState.create session.config game in
           print 1 "@[<v>";
           let answer = solve initial_state G.top_level (Model.from_map []) [] in
           print 1 "@]@,";
