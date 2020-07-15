@@ -202,7 +202,7 @@ module Game = struct
     let state = { newvars = intro; foralls = []; existentials = []; universals = []; } in
     let ground, { newvars; foralls; existentials; universals } = aux body state in
     (module struct
-      let top_level = Level.{id; ground = ground; rigid; newvars; foralls;}
+      let top_level = Level.{id; ground = Term.(ground &&& andN existentials); rigid; newvars; foralls;}
       let ground = ground
       let existentials = existentials
       let universals = universals
