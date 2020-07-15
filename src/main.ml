@@ -199,10 +199,10 @@ module Game = struct
     in
     print 5 "@[<2>Traversing term@,%a@]@," pp_term body;
     let id = !counter in
-    let state = { newvars = intro; foralls = []; existentials = []; universals = []; (* namings = [] *) } in
+    let state = { newvars = intro; foralls = []; existentials = []; universals = []; } in
     let ground, { newvars; foralls; existentials; universals } = aux body state in
     (module struct
-      let top_level = Level.{id; ground = Term.andN (ground::existentials); rigid; newvars; foralls;}
+      let top_level = Level.{id; ground = ground; rigid; newvars; foralls;}
       let ground = ground
       let existentials = existentials
       let universals = universals
@@ -331,7 +331,7 @@ let build_table model oldvar newvar =
   tbl
 
 let generalize_model model formula oldvar newvar : Term.t LazyList.t =
-  let formula, _ = IC.solve_all newvar formula in
+  (* let formula, _ = IC.solve_all newvar formula in *)
   let tbl = build_table model oldvar newvar in
   let rec aux1 list : subst LazyList.t = match list with
     | []      -> LazyList.singleton []
@@ -370,11 +370,11 @@ let rec solve state level model support : answer = try
         | [] -> Term.false0()
         | _ -> Context.get_model_interpolant context
       in
-      (* if (Model.get_bool_value model interpolant)
-       * then raise (BadInterpolant(state, level, interpolant));
-       * if Term.(equal interpolant (false0()))
-       * && not(Types.equal_smt_status (Context.check context) `STATUS_UNSAT)
-       * then raise (BadInterpolant(state, level, interpolant)); *)
+      if (Model.get_bool_value model interpolant)
+      then raise (BadInterpolant(state, level, interpolant));
+      if Term.(equal interpolant (false0()))
+      && not(Types.equal_smt_status (Context.check context) `STATUS_UNSAT)
+      then raise (BadInterpolant(state, level, interpolant));
       let answer = Unsat Term.(not1 interpolant) in
       print 3 "@[<2>Level %i answer on that model is@ @[%a@]@]" level.id pp_answer answer;
       answer
@@ -405,11 +405,10 @@ and treat_sat state level model support =
     (* We have satisfied all forall formulae; our model is good! *)
     | [] ->
       print 1 "@]@,";
+      let reasons = Level.(level.ground)::reasons in
       (* We first aggregate the reasons why our model worked *)
-      let reason = Term.andN reasons in
-      print 4 "@[Collected reason is %a@]@," pp_term reason;
       (* Any model satisfying true_of_model would have been a good model *)
-      let true_of_model = Term.(Level.(level.ground) &&& reason) in
+      let true_of_model = Term.andN reasons in
       print 4 "@[<2>true of model is@ @[<v>%a@]@]@," pp_term true_of_model;
       (* Now compute several projections of the reason on the rigid variables *)
       let seq =
