@@ -245,7 +245,7 @@ module Substs = struct
   let (||>) = (let*)
   
   let nil solutions = NonLinear solutions 
-  let eliminate subst solutions = Eliminate subst 
+  let eliminate subst _ = Eliminate subst 
   let nonlinear subst solutions = NonLinear(subst :: solutions) 
 
 end
@@ -258,13 +258,14 @@ let rec solve
     (atom : [`a2] Types.composite Types.termstruct)
     (polarity : bool)
     epsilons  (* The specs of the epsilon terms we have created in the recursive solve descent *)
+  : subst list -> Substs.substs
   =
   let Types.A2(cons,e,t) = atom in
-  if Term.equal e x then
+  if Term.equal e x then (* Particular case when the 1st argument is x itself - end of recursion *)
     try
       let subst = 
         match cons with
-        | `YICES_EQ_TERM when polarity -> { body = t; epsilons = [] }
+        | `YICES_EQ_TERM when polarity -> { body = t; epsilons }
         | _ ->
           let phi = getIC x atom polarity in
           let typ = Term.type_of_term x in
@@ -278,6 +279,7 @@ let rec solve
       else Substs.nonlinear subst
     with NotImplemented -> Substs.nil
   else
+    (* The recursive call is parameterised by e_i and t *)
     let treat e_i t' = solve x Types.(A2(cons, e_i, t')) polarity epsilons in
     let rec treat_nl = function
       | []             -> fun solutions -> solutions
@@ -293,11 +295,13 @@ let rec solve
       | []              -> fun solutions -> NonLinear(treat_nl accu solutions)
       | (e_i, t')::tail ->
         if fv x t'
-        then recurs_call ((e_i, t')::accu) tail
+        then recurs_call accu tail (* Non-linear case goes in accumulator *)
+        (* then recurs_call ((e_i, t')::accu) tail (\* Non-linear case goes in accumulator *\) *)
         else treat e_i t' ||> recurs_call accu tail
+        (* Linear case treated immediately doesn't go further if it comes back with Linear subst *)
     in
     let Term a = Term.reveal e in
-    match cons, a with
+    match cons, a with (* We analyse the top-level predicate and its 1st argument e *)
     | `YICES_EQ_TERM, Types.(BV_Sum l) ->
       getInversePoly x t l |> recurs_call []
     | `YICES_EQ_TERM, Types.(Astar(`YICES_BV_ARRAY, bits)) ->
