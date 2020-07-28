@@ -323,8 +323,8 @@ let build_table model oldvar newvar =
   List.iter treat_old oldvar;
   tbl
 
-let generalize_model model formula oldvar newvar : Term.t LazyList.t =
-  let formula, _ = IC.solve_all newvar formula in
+let generalize_model model formula oldvar newvar : Term.t LazyList.t * Term.t list =
+  let formula, epsilons = IC.solve_all newvar formula in
   let tbl = build_table model oldvar newvar in
   let rec aux1 list : subst LazyList.t = match list with
     | []      -> LazyList.singleton []
@@ -341,7 +341,8 @@ let generalize_model model formula oldvar newvar : Term.t LazyList.t =
     var, value, THash.find tbl value
   in
   let substs = newvar |> List.map aux |> aux1 in
-  LazyList.map (fun subst -> Term.subst_term subst formula) substs  
+  LazyList.map (fun subst -> Term.subst_term subst formula) substs,
+  epsilons
 
 
 let rec solve state level model support : answer = try
@@ -404,9 +405,10 @@ and treat_sat state level model support =
       let true_of_model = Term.andN reasons in
       print 4 "@[<2>true of model is@ @[<v>%a@]@]@," pp_term true_of_model;
       (* Now compute several projections of the reason on the rigid variables *)
-      let seq =
+      let seq, epsilons =
         generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
       in
+      Context.assert_formulas context epsilons;
       let underapprox = LazyList.extract !underapprox seq in
       print 3 "@[<v2>Level %i model works, with reason@,@[<v2>  %a@]@]"
         level.id
