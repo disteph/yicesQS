@@ -399,6 +399,7 @@ and treat_sat state level model support =
     | [] ->
       print 1 "@]@,";
       let reasons = Level.(level.ground)::reasons in
+      let reasons = Model.implicant_for_formulas model reasons in
       (* We first aggregate the reasons why our model worked *)
       (* Any model satisfying true_of_model would have been a good model *)
       let true_of_model = Term.andN reasons in
