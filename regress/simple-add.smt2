@@ -1,6 +1,0 @@
-(set-info :smt-lib-version 2.6)
-(set-logic QF_BV)
-(set-info :status sat)
-(assert (forall ((y (_ BitVec 32))) (exists ((x (_ BitVec 32))) (= (bvadd x y) #b00000000000000000000000000000000))))
-(check-sat)
-(exit)
