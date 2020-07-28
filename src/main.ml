@@ -324,7 +324,7 @@ let build_table model oldvar newvar =
   tbl
 
 let generalize_model model formula oldvar newvar : Term.t LazyList.t =
-  (* let formula, _ = IC.solve_all newvar formula in *)
+  let formula, _ = IC.solve_all newvar formula in
   let tbl = build_table model oldvar newvar in
   let rec aux1 list : subst LazyList.t = match list with
     | []      -> LazyList.singleton []
