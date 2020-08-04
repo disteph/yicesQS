@@ -135,32 +135,16 @@ let bvarray bits =
 (* Conditional inverses as in the Niemetz et al. CAV'2018 paper *)
 (****************************************************************)
 
+
+(*********************)
+(* Inverse functions *)
+(*********************)
+
 let width y = Type.bvsize(Term.type_of_term y)
 
-(* Solves concat(...,e_i,...) = t) in x *)
-
-let getInverseConcat (x : Term.t) (t : Term.t) (bits : Term.t list) =
-  let concat = bvarray bits in
-  let rec aux start_index = function
-    | [] -> [] (* x did not appear in a nice place *)
-
-    | Bits l:: tail ->
-      aux (start_index + List.length l) tail
-
-    | Extract{ extractee; lo; hi; polarity }::tail
-      when lo = 0 && hi = width extractee && fv x extractee ->
-      let t'  = Term.BV.bvextract t start_index (start_index + hi - 1) in
-      let t'  = if polarity then t' else Term.BV.bvnot t' in
-      (extractee, t') ::  (aux (start_index + hi - lo) tail)
-
-    | Extract{ lo; hi }::tail ->
-      aux (start_index + hi - lo) tail
-      
-  in
-  aux 0 concat
-
 (* Solves (P[x] = t) in x, for bv-polynomial P expressed as list l,
-   Works if x only appears in P as monomial x or -x, otherwise raises exception *)
+   Works if x only appears in P as monomial x or -x, otherwise raises exception
+   Table 4 of CAV'2018 *)
 
 let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) list) =
 
@@ -192,6 +176,32 @@ let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) li
   in
   aux [] l
 
+(* Solves concat(...,e_i,...) = t) in x *)
+
+let getInverseConcat (x : Term.t) (t : Term.t) (bits : Term.t list) =
+  let concat = bvarray bits in
+  let rec aux start_index = function
+    | [] -> [] (* x did not appear in a nice place *)
+
+    | Bits l:: tail ->
+      aux (start_index + List.length l) tail
+
+    | Extract{ extractee; lo; hi; polarity }::tail
+      when lo = 0 && hi = width extractee && fv x extractee ->
+      let t'  = Term.BV.bvextract t start_index (start_index + hi - 1) in
+      let t'  = if polarity then t' else Term.BV.bvnot t' in
+      (extractee, t') ::  (aux (start_index + hi - lo) tail)
+
+    | Extract{ lo; hi }::tail ->
+      aux (start_index + hi - lo) tail
+      
+  in
+  aux 0 concat
+
+
+(****************************)
+(* Invertibility conditions *)
+(****************************)
 
 type pred = [ `YICES_BV_GE_ATOM
             | `YICES_BV_SGE_ATOM
@@ -199,8 +209,211 @@ type pred = [ `YICES_BV_GE_ATOM
 
 exception NotImplemented
 
-let getIC (var : Term.t) (lit : [`a2] Types.composite Types.termstruct) (polarity : bool) : Term.t =
-  raise NotImplemented
+let mins ~width = true :: List.init (width - 1) (fun _ -> false)
+                  |> List.rev
+                  |> Term.BV.bvconst_from_list
+let maxs ~width = false :: List.init (width - 1) (fun _ -> true)
+                  |> List.rev
+                  |> Term.BV.bvconst_from_list
+
+(* Tables 2, 3, 5, 6, 7, 8 *)
+
+let getIC
+    (var : Term.t)
+    (cons : pred)
+    ~uneval
+    ~eval
+    ~uneval_left
+    ~polarity : Term.t =
+  let open Types in
+  let open Term in
+  let open BV in
+  let width = width uneval in
+  let zero  = bvconst_zero ~width in
+  let zero_neg = bvneg zero in
+    let filter (coeff, monom) =
+      match monom with
+      | Some monom when equal monom var ->
+        let coeff = bvconst_from_list coeff in
+        Term.equal coeff (bvconst_one ~width)
+        || Term.equal coeff (bvconst_int ~width (-1)) 
+      | _ -> true
+    in
+  let t = uneval in
+  let Term l = reveal uneval in
+  match cons with
+  | `YICES_EQ_TERM ->
+    begin
+      match l with
+      | _ when equal var uneval ->
+        assert(not polarity);
+        Term.true0()
+
+      | BV_Sum [coeff, Some monom] when equal var monom ->
+        let s = bvconst_from_list coeff in
+        if polarity
+        then (bvand [bvor [bvneg s; s]; t]) === t
+        else (s =/= zero) ||| (t =/= zero)
+        
+      | Product(true, prod) ->
+        let aux sofar ((p,exp) as a) =
+          if equal p var then
+            if Unsigned.UInt.to_int exp = 1 then sofar else raise NotImplemented
+          else
+            a::sofar
+        in
+        let s = build (Product (true, List.fold_left aux [] prod)) in
+        if polarity
+        then (bvand [bvor [bvneg s; s]; t]) === t
+        else (s =/= zero) ||| (t =/= zero)
+        
+      | A2(`YICES_BV_REM, x, s) when equal var x ->
+        if polarity
+        then bvsge (bvnot (bvneg s)) t
+        else (s =/= bvconst_one ~width) ||| (t =/= zero)
+
+      | A2(`YICES_BV_REM, s, x) when equal var x ->
+        if polarity
+        then bvsge (bvsum [t; t; bvneg s]) t
+        else (s =/= zero) ||| (t =/= zero)
+
+      | A2(`YICES_BV_DIV, x, s) when equal var x ->
+        if polarity
+        then (bvdiv (bvmul s t) s) === t
+        else (s =/= zero) ||| (t =/= zero_neg)
+
+      | A2(`YICES_BV_DIV, s, x) when equal var x ->
+        if polarity
+        then (bvdiv s (bvmul s t)) === t
+        else
+        if width = 1 then bvand [s; t] === zero
+        else true0()
+
+      (* | No easy representation of x & s = t in yices *)
+
+      | Astar(`YICES_OR_TERM, l) ->
+        let aux sofar a =
+          if equal a var then sofar
+          else a::sofar
+        in
+        let s = List.fold_left aux [] l in
+        if polarity
+        then (bvor (t::s)) === t
+        else
+          let s = build (Astar(`YICES_OR_TERM, s)) in
+          (s =/= zero_neg) ||| (t =/= zero_neg)
+
+      | A2(`YICES_BV_LSHR, x, s) when equal var x ->
+        if polarity
+        then (bvlshr (bvshl t s) s === t)
+        else
+          let w = bvconst_int ~width width in
+          t =/= zero ||| (bvlt s w)
+
+      | A2(`YICES_BV_LSHR, s, x) when equal var x ->
+        if polarity
+        then
+          let rec aux i accu =
+            if i = -1 then accu
+            else
+              let atom = (bvlshr s (bvconst_int ~width i) === t) in
+              aux (i-1) (atom :: accu)
+          in
+          orN (aux width [])
+        else
+          (s =/= zero) ||| (t =/= zero)
+
+      | A2(`YICES_BV_ASHR, x, s) when equal var x ->
+        if polarity
+        then
+          let w = bvconst_int ~width width in
+          ((bvlt s w) ==> (bvashr (bvshl t s) s === t))
+          &&&
+          ((bvge s w) ==> (( t === zero_neg) ||| (t === zero)))
+        else true0()
+        
+      | A2(`YICES_BV_ASHR, s, x) when equal var x ->
+        if polarity
+        then
+          let rec aux i accu =
+            if i = -1 then accu
+            else
+              let atom = (bvashr s (bvconst_int ~width i) === t) in
+              aux (i-1) (atom :: accu)
+          in
+          orN (aux width [])
+        else
+          ((t =/= zero)     ||| (s =/= zero))
+          &&&
+          ((t =/= zero_neg) ||| (s =/= zero_neg))
+
+      | A2(`YICES_BV_SHL, x, s) when equal var x ->
+        if polarity
+        then (bvshl (bvlshr t s) s) === t
+        else (t =/= zero) ||| (bvlt s (bvconst_int ~width width))
+        
+      | A2(`YICES_BV_SHL, s, x) when Term.equal var x ->
+        if polarity
+        then
+          let rec aux i accu =
+            if i = -1 then accu
+            else
+              let atom = (bvshl s (bvconst_int ~width i) === t) in
+              aux (i-1) (atom :: accu)
+          in
+          orN (aux width [])
+        else
+          (s =/= zero) ||| (t =/= zero)
+
+      | A2(`YICES_BV_SMOD, x, s)
+      | A2(`YICES_BV_SDIV, x, s)
+      | A2(`YICES_BV_SREM, x, s)
+        -> raise NotImplemented
+             
+      | A2(`YICES_BV_GE_ATOM, _, _)
+      | A2(`YICES_EQ_TERM, _, _)
+      | A2(`YICES_BV_SGE_ATOM, _, _)
+        -> assert false
+      | _ -> assert false
+    end
+
+  | `YICES_BV_GE_ATOM ->
+    let cond() =
+      if polarity
+      then Term.true0()
+      else if uneval_left
+      then t =/= zero
+      else t =/= zero_neg
+    in
+    begin
+      match l with
+      (* hard to characterise when l is bvneg *)
+      | _ when equal var uneval -> cond()
+      (* | BV_Sum l when List.for_all filter l ->  cond() *)
+      | _ -> raise NotImplemented
+    end
+
+  | `YICES_BV_SGE_ATOM ->
+    let cond() =
+      if polarity
+      then Term.true0()
+      else if uneval_left
+      then t =/= mins ~width
+      else t =/= maxs ~width
+    in
+    begin
+      match l with
+      (* hard to characterise when l is bvneg *)
+      (* | _ when equal var uneval -> cond() *)
+      (* | BV_Sum l when List.for_all filter l ->  cond() *)
+      | _ -> raise NotImplemented
+    end
+
+
+
+(**************************)
+(* Building substitutions *)
+(**************************)
 
 module Monad = struct
   type modif = (Term.t * Term.t) option
@@ -253,25 +466,37 @@ open Substs
 
 (* Fig 1 *)
 
+let make_lit (cons : pred) ~uneval ~eval ~uneval_left ~polarity =
+  let lhs, rhs = if uneval_left then uneval, eval else eval, uneval in
+  let atom = Term.build Types.(A2(cons,lhs,rhs)) in
+  if polarity then atom else Term.not1 atom
+
 let rec solve
     (x : Term.t)
-    (atom : [`a2] Types.composite Types.termstruct)
-    (polarity : bool)
+    (cons : pred)
+    ~uneval
+    ~eval
+    ~uneval_left
+    ~polarity
     epsilons  (* The specs of the epsilon terms we have created in the recursive solve descent *)
   : subst list -> Substs.substs
   =
-  let Types.A2(cons,e,t) = atom in
+  print 4 "@[<2>solve with var = %a, uneval = %a and eval = %a@]@,"
+    Term.pp x
+    Term.pp uneval
+    Term.pp eval;
+  let e,t = uneval, eval in
   if Term.equal e x then (* Particular case when the 1st argument is x itself - end of recursion *)
     try
+      print 4 "@[<2>uneval is the variable@]@,";
       let subst = 
         match cons with
         | `YICES_EQ_TERM when polarity -> { body = t; epsilons }
         | _ ->
-          let phi = getIC x atom polarity in
+          let phi = getIC x cons ~uneval ~eval ~uneval_left ~polarity in
           let typ = Term.type_of_term x in
           let y = Term.new_uninterpreted typ in
-          let b = Term.build Types.(A2(cons,y,t)) in
-          let b = if polarity then b else Term.not1 b in
+          let b = make_lit cons ~uneval:y ~eval:t ~uneval_left ~polarity in
           { body = y; epsilons = Term.(phi ==> b)::epsilons }
       in
       if not(fv x t)
@@ -279,8 +504,10 @@ let rec solve
       else Substs.nonlinear subst
     with NotImplemented -> Substs.nil
   else
+    begin
+    print 4 "@[<2>uneval is not the variable@]@,";
     (* The recursive call is parameterised by e_i and t *)
-    let treat e_i t' = solve x Types.(A2(cons, e_i, t')) polarity epsilons in
+    let treat e_i t' = solve x cons ~uneval:e_i ~eval:t' ~uneval_left ~polarity epsilons in
     let rec treat_nl = function
       | []             -> fun solutions -> solutions
       | (e_i,t')::tail ->
@@ -321,13 +548,13 @@ let rec solve
         | dx'_raw, None -> Substs.nil
         | dx'_raw, Some(x', e_i) -> try
             let dx' = Term.build dx'_raw in
-            let phi = getIC x' Types.(A2(cons,dx',t)) polarity in
+            let phi = getIC x' cons ~uneval:dx' ~eval:t ~uneval_left ~polarity in
             let typ = Term.type_of_term x' in
             let y   = Term.new_variable typ in
             let dy  = Term.subst_term [x',y] dx' in
-            let b   = Term.build Types.(A2(cons,dy,t)) in
-            let b   = if polarity then b else Term.not1 b in
-            solve x Types.(A2(`YICES_EQ_TERM, e_i, y)) true (Term.(phi ==> b)::epsilons)
+            let b   = make_lit cons ~uneval:dy ~eval:t ~uneval_left ~polarity in
+            solve x `YICES_EQ_TERM ~uneval:e_i ~eval:y ~uneval_left:true ~polarity:true
+              (Term.(phi ==> b)::epsilons)
           with NotImplemented -> Substs.nil
       in
       let rec aux = function
@@ -335,6 +562,7 @@ let rec solve
         | head::tail -> treat head ||> aux tail
       in
       aux variants
+  end
 
 let solve_atom
     (x : Term.t)
@@ -347,27 +575,30 @@ let solve_atom
     Term.pp x
     Term.pp e
     Term.pp t;
-  if fv x t
-  then if fv x e
-    then match cons with
-      | `YICES_EQ_TERM when Term.is_bitvector t || Term.is_arithmetic t ->
-        print 6 "@[<2>Present on both sides, and is bv or arith@]@,";
-        let lhs, rhs =
-          if Term.is_bitvector t
-          then Term.BV.bvsub t e, Term.BV.bvconst_zero ~width:(width t)
-          else Term.Arith.sub t e, Term.Arith.zero()
-        in
-        solve x Types.(A2(cons, lhs, rhs)) polarity epsilons
-      | _ ->
-        print 6 "@[<2>Present on both sides, and is not bv or arith@]@,";
-        solve x Types.(A2(cons,e,t)) polarity epsilons
-        ||> solve x Types.(A2(cons,t,e)) polarity epsilons
+  match cons with
+  | `YICES_EQ_TERM | `YICES_BV_GE_ATOM | `YICES_BV_SGE_ATOM as cons ->
+    if fv x t
+    then if fv x e
+      then match cons with
+        | `YICES_EQ_TERM when Term.is_bitvector t || Term.is_arithmetic t ->
+          print 6 "@[<2>Present on both sides, and is bv or arith@]@,";
+          let uneval, eval =
+            if Term.is_bitvector t
+            then Term.BV.bvsub t e, Term.BV.bvconst_zero ~width:(width t)
+            else Term.Arith.sub t e, Term.Arith.zero()
+          in
+          solve x `YICES_EQ_TERM ~uneval ~eval ~uneval_left:true ~polarity epsilons
+        | _ ->
+          print 6 "@[<2>Present on both sides, and is not bv or arith@]@,";
+          solve x cons ~uneval:e ~eval:t ~uneval_left:true ~polarity epsilons
+          ||> solve x cons ~uneval:t ~eval:e ~uneval_left:false ~polarity epsilons
+      else
+        (print 6 "@[<2>Present on rhs only@]@,";
+         solve x cons ~uneval:t ~eval:e ~uneval_left:false ~polarity epsilons)
     else
-      (print 6 "@[<2>Present on rhs only@]@,";
-       solve x Types.(A2(cons,t,e)) polarity epsilons)
-  else
-    (print 6 "@[<2>Present on lhs only@]@,";
-     solve x Types.(A2(cons,e,t)) polarity epsilons)
+      (print 6 "@[<2>Present on lhs only@]@,";
+       solve x cons ~uneval:e ~eval:t ~uneval_left:true ~polarity epsilons)
+  | _ -> assert false
 
 
 let solve_lit x lit =

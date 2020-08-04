@@ -408,9 +408,11 @@ and treat_sat state level model support =
       let seq, epsilons =
         generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
       in
+      print 3 "@[<v2>Recording epsilons @,@[<v2>  %a@]@]@,"
+        (List.pp pp_term) epsilons;
       Context.assert_formulas context epsilons;
       let underapprox = LazyList.extract !underapprox seq in
-      print 3 "@[<v2>Level %i model works, with reason@,@[<v2>  %a@]@]"
+      print 3 "@[<v2>Level %i model works, with reason@,@[<v2>  %a@]@]@,"
         level.id
         (List.pp pp_term)
         underapprox;
@@ -472,8 +474,8 @@ and treat_sat state level model support =
       | Sat reasons ->
         assert(List.length reasons > 0);
         let aux reason =
-          if not (Model.get_bool_value model reason)
-          then raise (BadUnder(state, level, reason));
+          (* if not (Model.get_bool_value model reason)
+           * then raise (BadUnder(state, level, reason)); *)
           (* We substitute o.name by true in case it appears in the reasons (is it possible?) *)
           let gen_model =
             Model.generalize_model model reason [o.name;o.selector] `YICES_GEN_DEFAULT
