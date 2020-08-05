@@ -41,7 +41,7 @@ end
 module OptionMonad = struct
   include Option
   let bind = ( >>= )
-  let (let*) = bind
+  (* let (let*\) = bind *)
 end
 
 open MTerm(OptionMonad)
@@ -142,9 +142,13 @@ let bvarray bits =
 
 let width y = Type.bvsize(Term.type_of_term y)
 
+
 (* Solves (P[x] = t) in x, for bv-polynomial P expressed as list l,
-   Works if x only appears in P as monomial x or -x, otherwise raises exception
-   Table 4 of CAV'2018 *)
+   inspired by Table 4 of CAV'2018.
+   It produces a list of pairs (e_i, t_i) such that
+   * x is free in e_i
+   * e_i is either a monomial variable of P, or a monomial (cst*e_i') of P with cst not 1 or -1)
+   * (e_i = t_i) is equivalent to (P[x] = t) *)
 
 let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) list) =
 
@@ -160,23 +164,30 @@ let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) li
      We fold the following function over the polynomial expressed as l. *)
 
   let rec aux treated = function
-    | [] -> [] (* could not find a monomial with variable x and coefficient 1 or -1 *)
+    | [] -> []
     | (bl,Some e_i) as monomial::to_treat when fv x e_i ->
+      let next = aux (monomial::treated) to_treat in
+      let t'   = rebuild treated to_treat in
       begin match bl with
         | true::tail when List.for_all (fun b -> b) tail ->  (* coeff is -1 *)
-          let t' = Term.BV.bvneg(rebuild treated to_treat) in
-          (e_i,t') :: (aux (monomial::treated) to_treat)
+          (e_i, Term.BV.bvneg t') :: next
         | true::tail when List.for_all (fun b -> not b) tail -> (* coeff is 1 *)
-          let t' = rebuild treated to_treat in
-          (e_i, t') :: (aux (monomial::treated) to_treat)
-        | _ -> aux (monomial::treated) to_treat
+          (e_i, t') :: next
+        | _ ->
+          let coeff = Term.BV.bvconst_from_list bl in
+          let monom_term = Term.BV.bvproduct [coeff; e_i] in 
+          (monom_term, t')::next
       end
     | monomial ::to_treat -> aux (monomial::treated) to_treat
 
   in
   aux [] l
 
-(* Solves concat(...,e_i,...) = t) in x *)
+(* Solves concat(...,e_i,...) = t) in x
+   It produces a list of pairs (e_i, t_i) such that
+   * x is free in e_i
+   * e_i is not a BV_ARRAY, and in particular not an extract
+   * (e_i = t_i) is implied by concat(...,e_i,...) = t *)
 
 let getInverseConcat (x : Term.t) (t : Term.t) (bits : Term.t list) =
   let concat = bvarray bits in
@@ -231,15 +242,15 @@ let getIC
   let width = width uneval in
   let zero  = bvconst_zero ~width in
   let zero_neg = bvneg zero in
-    let filter (coeff, monom) =
-      match monom with
-      | Some monom when equal monom var ->
-        let coeff = bvconst_from_list coeff in
-        Term.equal coeff (bvconst_one ~width)
-        || Term.equal coeff (bvconst_int ~width (-1)) 
-      | _ -> true
-    in
-  let t = uneval in
+  let filter (coeff, monom) =
+    match monom with
+    | Some monom when equal monom var ->
+      let coeff = bvconst_from_list coeff in
+      Term.equal coeff (bvconst_one ~width)
+      || Term.equal coeff (bvconst_int ~width (-1)) 
+    | _ -> true
+  in
+  let t = eval in
   let Term l = reveal uneval in
   match cons with
   | `YICES_EQ_TERM ->
@@ -389,7 +400,7 @@ let getIC
       match l with
       (* hard to characterise when l is bvneg *)
       | _ when equal var uneval -> cond()
-      (* | BV_Sum l when List.for_all filter l ->  cond() *)
+      | BV_Sum l when List.for_all filter l ->  cond()
       | _ -> raise NotImplemented
     end
 
@@ -404,8 +415,8 @@ let getIC
     begin
       match l with
       (* hard to characterise when l is bvneg *)
-      (* | _ when equal var uneval -> cond() *)
-      (* | BV_Sum l when List.for_all filter l ->  cond() *)
+      | _ when equal var uneval -> cond()
+      | BV_Sum l when List.for_all filter l ->  cond()
       | _ -> raise NotImplemented
     end
 
@@ -438,7 +449,8 @@ let pp_subst x fmt { body; epsilons } =
 module Substs = struct
 
   type substs =
-    | Eliminate of subst
+    | Eliminate of subst  (* substitution eliminates variable AND
+                             faithfully represents literal from whence it came *)
     | NonLinear of subst list
 
   let pp_substs x fmt = function
@@ -451,11 +463,10 @@ module Substs = struct
 
   type t = subst list -> substs
 
-  let (let*) (a : t) f solutions =
+  let (||>) (a : t) f solutions =
     match a solutions with
-    | Eliminate _ as result -> result
-    | NonLinear result -> f result
-  let (||>) = (let*)
+    | Eliminate body as result -> result
+    | NonLinear result         -> f result
   
   let nil solutions = NonLinear solutions 
   let eliminate subst _ = Eliminate subst 
@@ -513,7 +524,7 @@ let rec solve
       | (e_i,t')::tail ->
         let cont f solutions =
             match treat e_i t' solutions with
-            | Eliminate result    -> f (result :: solutions)
+            | Eliminate subst     -> f (subst :: solutions)
             | NonLinear solutions -> f solutions
         in
         treat_nl tail |> cont
@@ -527,9 +538,18 @@ let rec solve
         else treat e_i t' ||> recurs_call accu tail
         (* Linear case treated immediately doesn't go further if it comes back with Linear subst *)
     in
+    let test_poly = function
+      | [coeff, Some var] ->
+        begin match coeff with
+          | true::tail when List.for_all (fun b -> b) tail -> true  (* coeff is -1 *)
+          | true::tail when List.for_all (fun b -> not b) tail -> true (* coeff is 1 *)
+          | _ -> false
+        end
+      | _ -> true
+    in
     let Term a = Term.reveal e in
     match cons, a with (* We analyse the top-level predicate and its 1st argument e *)
-    | `YICES_EQ_TERM, Types.(BV_Sum l) ->
+    | `YICES_EQ_TERM, Types.(BV_Sum l) when test_poly l ->
       getInversePoly x t l |> recurs_call []
     | `YICES_EQ_TERM, Types.(Astar(`YICES_BV_ARRAY, bits)) ->
       getInverseConcat x t bits |> recurs_call []
@@ -558,8 +578,12 @@ let rec solve
           with NotImplemented -> Substs.nil
       in
       let rec aux = function
-        | []         -> Substs.nil
-        | head::tail -> treat head ||> aux tail
+        | []             -> assert false
+        | [only_variant] -> treat only_variant
+        | head::tail -> fun solutions ->
+          match treat head solutions with
+          | Eliminate subst     -> aux tail (subst :: solutions)
+          | NonLinear solutions -> aux tail solutions
       in
       aux variants
   end
@@ -601,44 +625,71 @@ let solve_atom
   | _ -> assert false
 
 
-let solve_lit x lit =
+let solve_lit x lit substs =
   let open Term in
   let open Types in
+  print 1 "@[<v2>solve_lit looks at@,%a@," Term.pp lit;
   let aux b t =
-    if Term.equal x t then
-      let body = if b then Term.true0() else Term.false0() in
-      Substs.eliminate { body; epsilons = [] }
-    else
-      match reveal t with
-      | Term(A2 _ as atom) when fv x t ->
-        let r = solve_atom x atom b [] in
-        print 1 "@[<2>solve_lit turns %a into %a@]@," Term.pp lit (Substs.pp_substs x) (r []);
-        r
-      | _ -> Substs.nil
+    let r =
+      if Term.equal x t then
+        let body = if b then Term.true0() else Term.false0() in
+        Substs.eliminate {body; epsilons = []} substs
+      else
+        match reveal t with
+        | Term(A2 _ as atom) when fv x t -> solve_atom x atom b [] substs
+        | _ -> Substs.nil substs
+    in
+    print 1 "@[<2>which turns into %a@]@]@," (Substs.pp_substs x) r;
+    r
   in
   match reveal lit with
   | Term(A1(`YICES_NOT_TERM, t')) -> aux false t'
   | _ -> aux true lit
 
 
-let solve_list ((l,epsilons) as le) x =
-  let rec aux = function
-    | [] -> Substs.nil
-    | lit::tail -> solve_lit x lit ||> aux tail
-  in
-  let substitute {body ; epsilons } (l,old_epsilons) =
-    print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
-    Term.subst_terms [x,body] l, Term.subst_terms [x,body] old_epsilons @ epsilons
-  in
-  let results = aux l [] in
-  print 3 "@[<2>solve_list solves %a from %a, giving %a@]@,"
+let solve_list conjuncts old_epsilons x : Term.t list * Term.t list * bool =
+  print 3 "@[<hv2>solve_list solves %a from@,%a@,@[<v>"
     Term.pp x
-    (List.pp Term.pp) l
-    (Substs.pp_substs x) results;
-  match results with
-  | Eliminate subst -> substitute subst le 
-  | NonLinear _ -> le
-  (* | NonLinear(subst::_) -> substitute subst le *)
+    (List.pp Term.pp) conjuncts;
+  let rec aux treated accu = function
+    | [] ->
+      begin match accu with
+        | [Some not_faithful, {body; epsilons}] ->
+          print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
+          Term.subst_terms [x,body] conjuncts,
+          epsilons @ Term.subst_terms [x,body] old_epsilons,
+          not_faithful()
+        | _ ->
+          print 5 "@[<2>solve_list does not substitute@]@,";
+          conjuncts, old_epsilons, true
+      end
+      
+    | lit::tail ->
+      match solve_lit x lit [] with
+
+      | Eliminate { body; epsilons = [] } ->
+        print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
+        Term.subst_terms [x,body] conjuncts, Term.subst_terms [x,body] old_epsilons, false
+
+      | Eliminate subst  ->
+        let not_faithful() =
+          List.exists (fv x) treated
+          || List.exists (fv x) tail
+          || List.exists (fv x) old_epsilons
+        in
+
+        aux (lit::treated) ((Some not_faithful, subst)::accu) tail
+
+      | NonLinear substs ->
+        let rec aux2 accu = function
+          | [] -> accu
+          | subst::substs -> aux2 ((None, subst)::accu) substs
+        in
+        aux (lit::treated) (aux2 accu substs) tail
+  in
+  let result = aux [] [] conjuncts in
+  print 3 "@]@]@,";
+  result
 
 
 let solve_all vars t =
@@ -655,5 +706,12 @@ let solve_all vars t =
     | _ -> [t]
   in
   print 3 "@[<2>IC analyses %a@]@," Term.pp t;
-  let l,epsilons = List.fold_left solve_list (conjuncts,[]) vars in
-  Term.andN l, epsilons
+  let rec aux conjuncts epsilons = function
+    | [] -> conjuncts, epsilons
+    | x::vars ->
+      match solve_list conjuncts epsilons x with
+      | _, _, true                 -> aux conjuncts epsilons vars
+      | conjuncts, epsilons, false -> aux conjuncts epsilons vars
+  in
+  let conjuncts, epsilons = aux conjuncts [] vars in
+  Term.andN conjuncts, epsilons

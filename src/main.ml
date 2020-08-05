@@ -474,8 +474,14 @@ and treat_sat state level model support =
       | Sat reasons ->
         assert(List.length reasons > 0);
         let aux reason =
-          (* if not (Model.get_bool_value model reason)
-           * then raise (BadUnder(state, level, reason)); *)
+          (* begin
+           *   Context.push context;
+           *   Context.assert_formula context (Term.not1 reason);
+           *   match Context.check_with_model context model support with
+           *   | `STATUS_SAT   -> raise (BadUnder(state, level, reason))
+           *   | `STATUS_UNSAT -> Context.pop context
+           *   | _ -> assert false
+           * end; *)
           (* We substitute o.name by true in case it appears in the reasons (is it possible?) *)
           let gen_model =
             Model.generalize_model model reason [o.name;o.selector] `YICES_GEN_DEFAULT
