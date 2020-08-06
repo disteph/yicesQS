@@ -241,7 +241,7 @@ let getIC
   let open BV in
   let width = width uneval in
   let zero  = bvconst_zero ~width in
-  let zero_neg = bvneg zero in
+  let zero_not = bvnot zero in
   let filter (coeff, monom) =
     match monom with
     | Some monom when equal monom var ->
@@ -253,10 +253,10 @@ let getIC
   let t = eval in
   let Term l = reveal uneval in
   match cons with
-  | `YICES_EQ_TERM ->
+  | `YICES_EQ_TERM -> (* Table 2 *)
     begin
       match l with
-      | _ when equal var uneval ->
+      | _ when equal var uneval ->  (* Not actually given in the paper, just obvious *)
         assert(not polarity);
         Term.true0()
 
@@ -291,7 +291,7 @@ let getIC
       | A2(`YICES_BV_DIV, x, s) when equal var x ->
         if polarity
         then (bvdiv (bvmul s t) s) === t
-        else (s =/= zero) ||| (t =/= zero_neg)
+        else (s =/= zero) ||| (t =/= zero_not)
 
       | A2(`YICES_BV_DIV, s, x) when equal var x ->
         if polarity
@@ -312,7 +312,7 @@ let getIC
         then (bvor (t::s)) === t
         else
           let s = build (Astar(`YICES_OR_TERM, s)) in
-          (s =/= zero_neg) ||| (t =/= zero_neg)
+          (s =/= zero_not) ||| (t =/= zero_not)
 
       | A2(`YICES_BV_LSHR, x, s) when equal var x ->
         if polarity
@@ -340,7 +340,7 @@ let getIC
           let w = bvconst_int ~width width in
           ((bvlt s w) ==> (bvashr (bvshl t s) s === t))
           &&&
-          ((bvge s w) ==> (( t === zero_neg) ||| (t === zero)))
+          ((bvge s w) ==> (( t === zero_not) ||| (t === zero)))
         else true0()
         
       | A2(`YICES_BV_ASHR, s, x) when equal var x ->
@@ -356,7 +356,7 @@ let getIC
         else
           ((t =/= zero)     ||| (s =/= zero))
           &&&
-          ((t =/= zero_neg) ||| (s =/= zero_neg))
+          ((t =/= zero_not) ||| (s =/= zero_not))
 
       | A2(`YICES_BV_SHL, x, s) when equal var x ->
         if polarity
@@ -394,14 +394,198 @@ let getIC
       then Term.true0()
       else if uneval_left
       then t =/= zero
-      else t =/= zero_neg
+      else t =/= zero_not
     in
     begin
       match l with
-      (* hard to characterise when l is bvneg *)
-      | _ when equal var uneval -> cond()
-      | BV_Sum l when List.for_all filter l ->  cond()
-      | _ -> raise NotImplemented
+
+      (* Table 5 cases *)
+      | _ when equal var uneval             -> cond()
+      | BV_Sum l when List.for_all filter l -> cond()
+
+      (* Tables 3 and 6 *)
+      | BV_Sum [coeff, Some monom] when equal var monom ->
+        let s = bvconst_from_list coeff in
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then bvge (bvor [bvneg s; s]) t
+          else true0()
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then t =/= zero
+        else bvlt t (bvor [bvneg s; s])
+
+      | Product(true, prod) ->
+        let aux sofar ((p,exp) as a) =
+          if equal p var then
+            if Unsigned.UInt.to_int exp = 1 then sofar else raise NotImplemented
+          else
+            a::sofar
+        in
+        let s = build (Product (true, List.fold_left aux [] prod)) in
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then bvge (bvor [bvneg s; s]) t
+          else true0()
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then t =/= zero
+        else bvlt t (bvor [bvneg s; s])
+
+      | A2(`YICES_BV_REM, x, s) when equal var x ->
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then bvge (bvnot (bvneg s)) t
+          else true0()
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then t =/= zero
+        else bvlt t (bvnot (bvneg s))
+
+      | A2(`YICES_BV_REM, s, x) when equal var x ->
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then bvge (bvand [bvsum [t; t; bvneg s] ; s]) t ||| (bvlt t s)
+          else true0()
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then t =/= zero
+        else bvlt t s
+
+      | A2(`YICES_BV_DIV, x, s) when equal var x ->
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then bvand [ bvdiv (bvmul s t) t ; s] === s
+          else true0()
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then (bvlt zero s) &&& (bvlt zero t)
+        else bvgt (bvdiv zero_not s) t
+
+      | A2(`YICES_BV_DIV, s, x) when equal var x ->
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then true0()
+          else bvlt zero (bvor [ bvneg s ; t])
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then (bvlt zero (bvnot(bvand [bvneg t ; s]))) &&& (bvlt zero t)
+        else bvlt t zero_not
+
+      (* | No easy representation of x & s = t in yices *)
+
+      | Astar(`YICES_OR_TERM, l) ->
+        let aux sofar a =
+          if equal a var then sofar
+          else a::sofar
+        in
+        let s = List.fold_left aux [] l in
+        let s = build (Astar(`YICES_OR_TERM, s)) in
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then true0()
+          else bvge t s
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then bvlt s t
+        else bvlt t zero_not
+
+      | A2(`YICES_BV_LSHR, x, s) when equal var x ->
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then (bvlshr (bvshl t s) s === t)
+          else true0()
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then t =/= zero
+        else bvlt t (bvlshr (bvnot s) s)
+
+      | A2(`YICES_BV_LSHR, s, x) when equal var x ->
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then bvge s t
+          else true0()
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then t =/= zero
+        else bvlt t s
+
+      | A2(`YICES_BV_ASHR, x, s) when equal var x ->
+        if polarity
+        then (* Table 6 *)
+          true0()
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then t =/= zero
+        else bvlt t zero_not
+
+      | A2(`YICES_BV_ASHR, s, x) when equal var x ->
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then bvge s (bvnot s) ||| bvge s t
+          else bvlt s (mins ~width) ||| bvge t s
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then (bvlt s t ||| bvsge s zero) &&& (t =/= zero)
+        else (bvslt s (bvlshr s (bvnot t))) ||| (bvlt t s)
+
+      | A2(`YICES_BV_SHL, x, s) when equal var x ->
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then bvge (bvshl zero_not s) t
+          else true0()
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then t =/= zero
+        else bvlt t (bvshl zero_not s)
+
+      | A2(`YICES_BV_SHL, s, x) when Term.equal var x ->
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then
+            let rec aux i accu =
+              if i = -1 then accu
+              else
+                let atom = bvge (bvshl s (bvconst_int ~width i)) t in
+                aux (i-1) (atom :: accu)
+            in
+            orN (aux width [])
+          else true0()
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then t =/= zero
+        else
+          let rec aux i accu =
+            if i = -1 then accu
+            else
+              let atom = bvgt (bvshl s (bvconst_int ~width i)) t in
+              aux (i-1) (atom :: accu)
+          in
+          orN (aux width [])
+
+      | A2(`YICES_BV_SMOD, x, s)
+      | A2(`YICES_BV_SDIV, x, s)
+      | A2(`YICES_BV_SREM, x, s)
+        -> raise NotImplemented
+             
+      | A2(`YICES_BV_GE_ATOM, _, _)
+      | A2(`YICES_EQ_TERM, _, _)
+      | A2(`YICES_BV_SGE_ATOM, _, _)
+        -> assert false
+      | _ -> assert false
+
     end
 
   | `YICES_BV_SGE_ATOM ->
@@ -414,9 +598,10 @@ let getIC
     in
     begin
       match l with
-      (* hard to characterise when l is bvneg *)
+      (* Table 5 cases *)
       | _ when equal var uneval -> cond()
       | BV_Sum l when List.for_all filter l ->  cond()
+      (* Tables 7 and 8 *)
       | _ -> raise NotImplemented
     end
 
