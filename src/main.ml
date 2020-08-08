@@ -327,7 +327,7 @@ let generalize_model model formula oldvar newvar : Term.t LazyList.t * Term.t li
   let formula, epsilons = IC.solve_all newvar formula in
   let tbl = build_table model oldvar newvar in
   let rec aux1 list : subst LazyList.t = match list with
-    | []      -> LazyList.singleton []
+    | []      -> LazyList.return []
     | (var, value, terms)::other_vars ->
       let rest = aux1 other_vars in
       let rec aux2 = function
@@ -409,7 +409,7 @@ and treat_sat state level model support =
         generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
       in
       print 3 "@[<v2>Recording epsilons @,@[<v2>  %a@]@]@,"
-        (List.pp pp_term) epsilons;
+        (List.pp Term.pp) epsilons;
       Context.assert_formulas context epsilons;
       let underapprox = LazyList.extract !underapprox seq in
       print 3 "@[<v2>Level %i model works, with reason@,@[<v2>  %a@]@]@,"
