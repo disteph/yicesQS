@@ -42,7 +42,6 @@ module LazyList = struct
       match Lazy.force l with
       | `Nil -> []
       | `Cons(head,tail) -> head::(extract (n-1) tail)
-
   
 end
 
@@ -53,7 +52,7 @@ end
 
 open MTerm(OptionMonad)
 
-let width y = Type.bvsize(Term.type_of_term y)
+let term_width y = Type.bvsize(Term.type_of_term y)
 
 (*************************)
 (* Free Variable testing *)
@@ -109,102 +108,134 @@ module BoolStruct = struct
     | Not a  -> Not(map f a)
 end
 
-module Slice = struct
+module Slice : sig
+  type t = private {
+    extractee : Yices2_ext_bindings.Term.t;
+    indices : (int * int) option;
+  }
+  val build   : ?indices:(int*int) -> Term.t -> t
+  val pp      : t Format.printer
+  val to_term : t -> Term.t
+  val width   : t -> int
+  val fv      : Term.t -> t -> bool
+end = struct
 
   type t = { extractee : Term.t;
-             lo        : int;
-             hi        : int }
+             indices   : (int * int) option }
   [@@deriving show]
 
-  let to_term {extractee; lo; hi} =
+  let build ?indices extractee =
+    assert(Term.is_bitvector extractee);
+    match indices with
+    | Some(lo,hi) when not(Int.equal lo 0 && Int.equal hi (term_width extractee)) ->
+      {extractee; indices}
+    | _ -> { extractee; indices = None }
+
+  let to_term {extractee; indices} =
+    match indices with
+    | None -> extractee
+    | Some(lo,hi) -> 
     Term.BV.bvextract extractee lo (hi-1)
 
-  let width {lo; hi} = hi - lo
+  let width { extractee; indices } = match indices with
+    | None -> term_width extractee
+    | Some(lo, hi) -> hi - lo
 
   let fv x {extractee} = fv x extractee
 end
 
-module Block = struct
+module SliceBlock = struct
   open BoolStruct
-  open Slice
 
-  type slice = Slice.t BoolStruct.t [@@deriving show]
+  type t = Slice.t BoolStruct.t [@@deriving show]
 
-  let rec slice_to_term = function
+  let rec to_term = function
     | Leaf slice -> Slice.to_term slice
-    | And l  -> Term.BV.bvand (List.map slice_to_term l)
-    | Or l   -> Term.BV.bvor  (List.map slice_to_term l)
-    | Not a  -> Term.BV.bvnot (slice_to_term a)
+    | And l  -> Term.BV.bvand (List.map to_term l)
+    | Or l   -> Term.BV.bvor  (List.map to_term l)
+    | Not a  -> Term.BV.bvnot (to_term a)
 
-  let rec slice_width = function
+  let rec width = function
     | Leaf slice -> Slice.width slice
     | And(a::_)
     | Or (a::_)
-    | Not a -> slice_width a
+    | Not a -> width a
     | _ -> assert false
 
-  let rec slice_fv x = function
+  let rec fv x = function
     | Leaf slice -> Slice.fv x slice
-    | And l | Or l -> List.exists (slice_fv x) l
-    | Not a -> slice_fv x a
+    | And l | Or l -> List.exists (fv x) l
+    | Not a -> fv x a
 
-  type t =
-    | Bits of Term.t list
-    | Slice of slice
-  [@@deriving show]
-
-  let to_term = function
-    | Bits bits -> Term.BV.bvarray bits
-    | Slice slice -> slice_to_term slice
-
-  let width = function
-    | Bits l -> List.length l
-    | Slice s -> slice_width s
-
-  let fv x = function
-    | Bits l  -> assert false
-    | Slice s -> slice_fv x s
+  let rec nnf polarity = function
+    | Leaf _ as l -> if polarity then l else Not l
+    | And l ->
+      let l = List.map (nnf polarity) l in
+      if polarity then And l else Or l
+    | Or l ->
+      let l = List.map (nnf polarity) l in
+      if polarity then Or l else And l
+    | Not a -> nnf (not polarity) a
+  
 end
 
 (* Terms extended with primitive constructs for bvand bvor bvneg *)
 
 module ExtTerm = struct
-  type 'a ext =
-    | T of 'a
-    | Block of Block.t
-    | Concat of t list
-  and t = Term.t ext [@@deriving show]
 
-  let rec to_term = function
+  type 'a bs   = BS
+  type 'a base = Base
+
+  type (_,_) ext =
+    | T      : 'a           -> ([`term]     base,'a) ext
+    | Bits   : Term.t list  -> ([`bits]  bs base, _) ext 
+    | Slice  : SliceBlock.t -> ([`slice] bs base, _) ext 
+    | Concat : block list   -> ([`concat],_) ext
+  and 'a raw = ('a,Term.t) ext
+  and t     = ExtTerm : _ raw -> t
+  and block = Block   : _ bs base raw -> block
+
+  let return a = ExtTerm(T a)
+
+  let rec pp_ext : type a b. b Format.printer -> (a,b) ext Format.printer =
+    fun pp_b fmt -> function
+    | T a -> pp_b fmt a
+    | Bits  block -> List.pp Term.pp fmt block
+    | Slice block -> BoolStruct.pp Slice.pp fmt block
+    | Concat l -> List.pp pp_block fmt l
+  and pp_raw : type a. a raw Format.printer = fun fmt a -> pp_ext Term.pp fmt a
+  and pp fmt (ExtTerm a) = pp_raw fmt a
+  and pp_block fmt (Block a) = pp_raw fmt a
+
+  let rec to_term : type a. a raw -> Term.t = function
     | T t -> t
-    | Block block -> Block.to_term block
-    | Concat l -> Term.BV.bvconcat (List.map to_term l)
+    | Bits  block -> Term.BV.bvarray block
+    | Slice block -> SliceBlock.to_term block
+    | Concat l    -> Term.BV.bvconcat (List.map (fun (Block b) -> to_term b) l)
 
-  type yt = Types.yterm ext
+  type 'a yraw = ('a,Types.yterm) ext
+  and yt = YExtTerm : 'a yraw -> yt
 
-  let reveal : t -> yt = function
-    | T a      -> T(Term.reveal a)
-    | Block a  -> Block a
-    | Concat l -> Concat l
+  let build : type a b. (a, b Types.termstruct) ext -> a raw = function
+    | T a         -> T(Term.build a)
+    | Bits bits   -> Bits bits
+    | Slice slice -> Slice slice
+    | Concat l    -> Concat l
 
-  let rec build = function
-    | T a      -> T(Term.build a)
-    | Block block -> Block block
-    | Concat l -> Concat l
-
-  let term_width = width
-  let rec width = function
+  let rec width : type a. (a,Term.t) ext -> int = function
     | T a      -> term_width a
-    | Block a  -> Block.width a
-    | Concat l -> List.fold_left (fun sofar block -> sofar + width block) 0 l
+    | Bits l   -> List.length l
+    | Slice slice -> SliceBlock.width slice
+    | Concat l -> List.fold_left (fun sofar (Block block) -> sofar + width block) 0 l
 
   let term_fv = fv
-  let rec fv x = function
-    | T a -> term_fv x a
-    | Block a -> Block.fv x a
-    | Concat l -> List.exists (fv x) l
+  let rec fv : type a. Term.t -> (a,Term.t) ext -> bool = fun x -> function
+    | T a      -> term_fv x a
+    | Bits a   -> List.exists (term_fv x) a
+    | Slice slice -> SliceBlock.fv x slice
+    | Concat l    -> List.exists (fun (Block b) -> fv x b) l
 
-  let typeof = function
+  let typeof : type a. (a,Term.t) ext -> Type.t = function
     | T a -> Term.type_of_term a
     | other -> width other |> Type.bv
 
@@ -233,22 +264,23 @@ let bvarray bits =
       Or t
     | _ -> None
   in
-  let open Block in
+  let open ExtTerm in
   let init_slice bit = function
     | Some bstruct ->
-      let aux (i,extractee) = Slice.{ extractee; lo = i; hi = i+1 } in
-      Slice(BoolStruct.map aux bstruct)
-    | None -> Bits [bit]
+      let aux (i,extractee) = Slice.build extractee ~indices:(i, i+1) in
+      Block(Slice(BoolStruct.map aux bstruct))
+    | None -> Block(Bits [bit])
   in
   let close_slice = function
-    | Slice _ as slice -> slice
-    | Bits l -> Bits(List.rev l)
+    | Block(Slice slice) -> Block(Slice(SliceBlock.nnf true slice))
+    | Block(Bits l)      -> Block(Bits(List.rev l))
   in
   let rec test slice bit =
     let open BoolStruct in
     match slice, bit with
-    | Leaf Slice.{extractee; lo; hi}, Leaf(i,t) when hi = i && Term.equal t extractee ->
-      return (Leaf Slice.{extractee; lo; hi = hi+1})
+    | Leaf Slice.{extractee; indices = Some(lo, hi) }, Leaf(i,t)
+      when hi = i && Term.equal t extractee ->
+      Option.return (Leaf(Slice.build extractee ~indices:(lo, hi+1)))
     | And l_slice, And l_bit ->
       let+ slice = aux [] (l_slice, l_bit) in
       And slice
@@ -260,7 +292,7 @@ let bvarray bits =
       Not slice
     | _ -> None
   and aux accu = function
-    | [], [] -> return accu
+    | [], [] -> Option.return accu
     | (head_slice::tail_slice), (head_bit::tail_bit) ->
       let* slice = test head_slice head_bit in
       aux (slice::accu) (tail_slice, tail_bit)
@@ -268,17 +300,17 @@ let bvarray bits =
   in
   let open ExtTerm in
   let rec aux ?slice accu bits = match slice, accu, bits with
-    | Some slice, _, [] -> (Block (close_slice slice))::accu (* we have finished, closing last slice *)
+    | Some slice, _, [] -> (close_slice slice)::accu (* we have finished, closing last slice *)
     | Some slice, _, bit::tail -> (* we had started and we have a new bit to look at *)
       let slice, accu = match slice, analyse bit with
-        | Slice s, (Some b as sbit) ->
+        | Block(Slice s), (Some b as sbit) ->
           begin
             match test s b with
-            | Some s -> Slice s, accu
-            | None -> init_slice bit sbit, (Block (close_slice slice))::accu
+            | Some s -> Block(Slice s), accu
+            | None -> init_slice bit sbit, (close_slice slice)::accu
           end
-        | Bits l, None -> Bits(bit::l), accu
-        | _, sbit -> init_slice bit sbit, (Block (close_slice slice))::accu
+        | Block(Bits l), None -> Block(Bits(bit::l)), accu
+        | _, sbit -> init_slice bit sbit, (close_slice slice)::accu
       in
       aux ~slice accu tail
     | None, [], bit::tail -> (* initialisation *)
@@ -314,8 +346,8 @@ let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) li
   let rebuild treated to_treat =
     let l = List.rev_append treated to_treat in
     match l with
-      | [] -> t
-      | _ -> Term.BV.(bvsub t (Term.build(Types.BV_Sum l)))
+    | [] -> t
+    | _ -> Term.BV.(bvsub t (Term.build(Types.BV_Sum l)))
   in
 
   (* First, we collect the coefficient of x in P (1 or -1),
@@ -327,15 +359,16 @@ let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) li
     | (bl,Some e_i) as monomial::to_treat when fv x e_i ->
       let next = aux (monomial::treated) to_treat in
       let t'   = rebuild treated to_treat in
+      let open ExtTerm in
       begin match bl with
         | true::tail when List.for_all (fun b -> b) tail ->  (* coeff is -1 *)
-          (ExtTerm.T e_i, Term.BV.bvneg t') :: next
+          (ExtTerm(T e_i), Term.BV.bvneg t') :: next
         | true::tail when List.for_all (fun b -> not b) tail -> (* coeff is 1 *)
-          (ExtTerm.T e_i, t') :: next
+          (ExtTerm(T e_i), t') :: next
         | _ ->
           let coeff = Term.BV.bvconst_from_list bl in
           let monom_term = Term.BV.bvproduct [coeff; e_i] in 
-          (ExtTerm.T monom_term, t')::next
+          (ExtTerm(T monom_term), t')::next
       end
     | monomial ::to_treat -> aux (monomial::treated) to_treat
 
@@ -348,8 +381,7 @@ let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) li
    * e_i is not a BV_ARRAY, and in particular not an extract
    * (e_i = t_i) is implied by concat(...,e_i,...) = t *)
 
-let getInverseConcat (x : Term.t) (t : Term.t) (concat : ExtTerm.t list) =
-  let open Block in
+let getInverseConcat (x : Term.t) (t : Term.t) (concat : ExtTerm.block list) =
   let open ExtTerm in
   let rec aux start_index = function
     | [] -> [] (* x did not appear in a nice place *)
@@ -358,15 +390,14 @@ let getInverseConcat (x : Term.t) (t : Term.t) (concat : ExtTerm.t list) =
       aux (start_index + List.length l) tail
 
     | Block(Slice bstruct) :: tail ->
-      let width = slice_width bstruct in
+      let width = SliceBlock.width bstruct in
       let next = aux (start_index + width) tail in
-      if slice_fv x bstruct
+      if SliceBlock.fv x bstruct
       then
         let t' = Term.BV.bvextract t start_index (start_index + width - 1) in
-        (Block(Slice bstruct), t') :: next
+        (ExtTerm(Slice bstruct), t') :: next
       else
         next
-    | T _ :: _ | Concat _ :: _ -> assert false
   in
   aux 0 concat
 
@@ -390,19 +421,21 @@ let maxs ~width = false :: List.init (width - 1) (fun _ -> true)
 
 (* Tables 2, 3, 5, 6, 7, 8 *)
 
-let getIC
+let getIC : type a. Term.t
+  -> pred -> uneval: a ExtTerm.raw -> eval:Term.t -> uneval_left:bool -> polarity:bool -> Term.t
+  = fun
     (var : Term.t)
     (cons : pred)
     ~uneval
     ~eval
     ~uneval_left
-    ~polarity : Term.t =
+    ~polarity ->
   let open Types in
   let open Term in
   let open BV in
   if not(Term.is_bitvector eval) then raise NotImplemented;
-  let width = ExtTerm.width uneval in
-  let zero  = bvconst_zero ~width in
+  let width    = ExtTerm.width uneval in
+  let zero     = bvconst_zero ~width in
   let zero_not = bvnot zero in
   let filter (coeff, monom) =
     match monom with
@@ -412,23 +445,50 @@ let getIC
       || Term.equal coeff (bvconst_int ~width (-1)) 
     | _ -> true
   in
+  let conjuncts_disjuncts l =
+    let open BoolStruct in
+    let open Slice in
+    let aux sofar = function
+      | Leaf{extractee; indices = None} when Term.equal extractee var -> sofar
+      | a -> (SliceBlock.to_term a)::sofar
+    in
+    List.fold_left aux [] l
+  in
+  (* let concat_collect l =
+   *   let open BoolStruct in
+   *   let open Slice in
+   *   let open ExtTerm in
+   *   let to_term = function
+   *     | [] -> None
+   *     | l  -> Some(to_term(Concat l))
+   *   in
+   *   let rec aux sofar = function
+   *     | Block(Slice(Leaf{extractee; indices = None}))::tail when Term.equal extractee var ->
+   *       to_term(List.rev sofar), to_term tail
+   *     | head::tail -> aux (head::sofar) tail
+   *     | [] -> assert false
+   *   in
+   *   aux [] l
+   * in *)
+  print 4 "@[<2>getIC on %s%a with uneval = %a (%s) and eval = %a (%s)@]@,"
+    (if polarity then "" else "the negation of ")
+    Types.pp_term_constructor (match cons with
+        | `YICES_BV_GE_ATOM  -> `YICES_BV_GE_ATOM
+        | `YICES_BV_SGE_ATOM -> `YICES_BV_SGE_ATOM
+        | `YICES_EQ_TERM -> `YICES_EQ_TERM)
+    ExtTerm.pp_raw uneval
+    (if uneval_left then "left" else "right")
+    Term.pp eval
+    (if uneval_left then "right" else "left");
+
   let t = eval in
-  match uneval with
-  | ExtTerm.T e ->
-    let Term l = reveal e in 
-    print 4 "@[<2>getIC on %s%a with uneval = %a (%s) and eval = %a (%s)@]@,"
-      (if polarity then "" else "the negation of ")
-      Types.pp_term_constructor (match cons with
-          | `YICES_BV_GE_ATOM  -> `YICES_BV_GE_ATOM
-          | `YICES_BV_SGE_ATOM -> `YICES_BV_SGE_ATOM
-          | `YICES_EQ_TERM -> `YICES_EQ_TERM)
-      Term.pp e
-      (if uneval_left then "left" else "right")
-      Term.pp eval
-      (if uneval_left then "right" else "left");
+  match cons with
+
+  | `YICES_EQ_TERM -> (* Table 2 *)
     begin
-      match cons with
-      | `YICES_EQ_TERM -> (* Table 2 *)
+      match uneval with
+      | ExtTerm.T e ->
+        let Term l = reveal e in 
         begin
           match l with
           | _ when equal var e ->  (* Not actually given in the paper, just obvious *)
@@ -474,20 +534,6 @@ let getIC
             else
             if width = 1 then bvand [s; t] === zero
             else true0()
-
-          (* | No easy representation of x & s = t in yices *)
-
-          | Astar(`YICES_OR_TERM, l) ->
-            let aux sofar a =
-              if equal a var then sofar
-              else a::sofar
-            in
-            let s = List.fold_left aux [] l in
-            if polarity
-            then (bvor (t::s)) === t
-            else
-              let s = build (Astar(`YICES_OR_TERM, s)) in
-              (s =/= zero_not) ||| (t =/= zero_not)
 
           | A2(`YICES_BV_LSHR, x, s) when equal var x ->
             if polarity
@@ -551,9 +597,10 @@ let getIC
             else
               (s =/= zero) ||| (t =/= zero)
 
-          | A2(`YICES_BV_SMOD, x, s)
-          | A2(`YICES_BV_SDIV, x, s)
-          | A2(`YICES_BV_SREM, x, s)
+          | A2(`YICES_BV_SMOD, _, _)
+          | A2(`YICES_BV_SDIV, _, _)
+          | A2(`YICES_BV_SREM, _, _)
+          | Astar(`YICES_OR_TERM, _) (* Rare: only if bvor not detected *)
             -> raise NotImplemented
 
           | A2(`YICES_BV_GE_ATOM, _, _)
@@ -563,19 +610,51 @@ let getIC
           | _ -> raise NotImplemented
         end
 
-      | `YICES_BV_GE_ATOM ->
-        let cond() =
-          if polarity
-          then Term.true0()
-          else if uneval_left
-          then t =/= zero
-          else t =/= zero_not
-        in
+      | ExtTerm.Slice(Leaf{ extractee; indices }) -> (* Not in tables, but obvious *)
+        true0()
+
+      | ExtTerm.Slice(And l) ->
+        let s = conjuncts_disjuncts l in
+        if polarity
+        then (bvand (t::s)) === t
+        else
+          (bvand s =/= zero) ||| (t =/= zero)
+
+      | ExtTerm.Slice(Or l) ->
+        let s = conjuncts_disjuncts l in
+        if polarity
+        then (bvor (t::s)) === t
+        else
+          (bvor s =/= zero_not) ||| (t =/= zero_not)
+
+      | ExtTerm.Slice(Not l) -> assert false (* Should not have led to epsilon-terms *)
+
+      | ExtTerm.Concat l ->
+        if polarity
+        then assert false (* Should not have led to epsilon-terms *)
+        else true0()
+
+      | ExtTerm.Bits _ -> assert false (* We should have abandoned ship by now *)
+
+    end
+    
+  | `YICES_BV_GE_ATOM ->
+    begin
+      let cond() = (* Table 5 *)
+        if polarity
+        then Term.true0()   (* Column 6 *)
+        else if uneval_left
+        then t =/= zero     (* Column 2 *)
+        else t =/= zero_not (* Column 3 *)
+      in
+      match uneval with
+      | ExtTerm.T e ->
+        let Term l = reveal e in 
         begin
           match l with
 
           (* Table 5 cases *)
-          | _ when equal var e             -> cond()
+          | _ when equal var e                  -> cond()
           | BV_Sum l when List.for_all filter l -> cond()
 
           (* Tables 3 and 6 *)
@@ -763,25 +842,74 @@ let getIC
 
         end
 
-      | `YICES_BV_SGE_ATOM ->
-        let cond() =
-          if polarity
-          then Term.true0()
-          else if uneval_left
-          then t =/= mins ~width
-          else t =/= maxs ~width
-        in
-        begin
-          match l with
-          (* Table 5 cases *)
-          | _ when equal var e -> cond()
-          | BV_Sum l when List.for_all filter l ->  cond()
-          (* Tables 7 and 8 *)
-          | _ -> raise NotImplemented
-        end
+      | ExtTerm.Slice(Not _)     (* Table 5 *)
+      | ExtTerm.Slice(Leaf _) -> (* Should be added to Table 5 *)
+        cond()
+
+      | ExtTerm.Slice(And l) ->
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then
+            let s = conjuncts_disjuncts l |> bvand in
+            bvge s t
+          else true0()
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then t =/= zero
+        else
+          let s = conjuncts_disjuncts l |> bvand in
+          bvlt t s
+
+      | ExtTerm.Slice(Or l) ->
+        if polarity
+        then (* Table 6 *)
+          if uneval_left (* uneval >= eval *)
+          then
+            true0()
+          else 
+            let s = conjuncts_disjuncts l |> bvor in
+            bvge t s
+        else (* Table 3 *)
+        if uneval_left (* uneval < eval *)
+        then
+          let s = conjuncts_disjuncts l |> bvor in
+          bvlt s t
+        else
+          t =/= zero_not
+
+      | ExtTerm.Concat l -> raise NotImplemented;
+        
+      | ExtTerm.Bits _ -> assert false (* We should have abandoned ship by now *)
     end
-  | ExtTerm.Block _ -> raise NotImplemented
-  | ExtTerm.Concat _ -> raise NotImplemented
+
+  | `YICES_BV_SGE_ATOM ->
+    let cond() = (* Table 5 *)
+      if polarity
+      then Term.true0() (* Column 6 *)
+      else if uneval_left
+      then t =/= mins width (* Column 4 *)
+      else t =/= maxs width (* Column 5 *)
+    in
+    match uneval with
+    | ExtTerm.T e ->
+      let Term l = reveal e in 
+      begin
+        match l with
+
+        (* Table 5 cases *)
+        | _ when equal var e -> cond()
+        | BV_Sum l when List.for_all filter l ->  cond()
+
+        (* Tables 7 and 8 *)
+        | _ -> raise NotImplemented
+      end
+    | ExtTerm.Slice(Not _)     (* Table 5 *)
+    | ExtTerm.Slice(Leaf _) -> (* Should be added to Table 5 *)
+      cond()
+    | ExtTerm.Slice _  -> raise NotImplemented
+    | ExtTerm.Concat _ -> raise NotImplemented
+    | ExtTerm.Bits _ -> assert false (* We should have abandoned ship by now *)
 
 
 (**************************)
@@ -791,34 +919,29 @@ let getIC
 module Monad = struct
 
   (* This monad is meant to create variants of a term-carrying type 
-     where at most 1 term has been substituted by a fresh variable.
-     If there are n terms packed in the original data, we should have (n+1) variants
-     (as we include the original data) *)
+     where at most 1 term has been substituted by a fresh variable. *)
 
-  (* A variant is generated by 1 optional modification *)
-  type modif = Term.t * ExtTerm.t
-  type 'a variant = 'a * modif 
-  (* A list of variants *)
-  type 'a variants = {
+  (* A variant is generated by 1 modification *)
+  type modif = { variable : Term.t; standing4 : ExtTerm.t }
+  type 'a variant = 'a * modif
+
+  (* The monad type is a (lazy) list of variants *)
+  type 'a t = {
     original : 'a;
     variants : 'a variant LazyList.t
   }
 
-  (* Monad type: tell me if a modification was already performed,
-     and I will update the list of variants *)
-  type 'a t = 'a variants
-
-  (* Return: I'll just add the unmodified data *)
+  (* Return: no variant *)
   let return a = {
     original = a;
     variants = LazyList.empty
   }
 
-  (* Bind: update the variants using the argument arg,
-     then go over each of them and apply f;
-     in each case a,
-     either a is the original data (no modification) and f can do up to 1 modification,
-     or a is modified, and f is not allowed to make further modifications *)
+  (* Bind: lazily compute the variants of the argument arg,
+     apply the function to the original argument,
+     authorising it to introduce variants,
+     as well as to all of the arguments' variants,
+     not authorising the function to perform and more modifications *)
 
   let bind (type a b) (arg: a t) (f : a -> b t) : b t =
     let f_original = f arg.original in
@@ -828,8 +951,8 @@ module Monad = struct
     { original = f_original.original;
       variants = LazyList.fold aux f_original.variants arg.variants }
 
-  let (let*) (type a b) (a : a t) (f : a->b) : b t = bind a (fun r -> return(f r))
-  let (let+) = bind
+  let (let*) = bind
+  let (let+) a f = bind a (fun r -> return(f r))
 end
 
 module Variants = struct
@@ -837,42 +960,64 @@ module Variants = struct
   open ExtTerm
   open Monad
 
+  let term_map = map
+
   let rec mapList : type a b. (a -> b Monad.t) -> a list -> b list Monad.t =
     fun f -> function
     | [] -> return []
     | head::tail ->
-      let+ h = f head in
-      let* t = mapList f tail in
+      let* h = f head in
+      let+ t = mapList f tail in
       h::t
 
-  let rec slice_map (f : ExtTerm.t -> ExtTerm.t Monad.t) slice =
-    let open BoolStruct in
+  open BoolStruct 
+
+  let slice_map
+      (fterm : Term.t -> Term.t Monad.t)
+      (fother : SliceBlock.t -> SliceBlock.t Monad.t)
+      slice =
     match slice with
-    | Leaf Slice.{extractee; lo; hi} -> 
-      let* extractee = f(T extractee) in (* Should produce variants of the form (T _) *)
-      let extractee  = ExtTerm.to_term extractee in (* Hence to_term should be (T t) -> t *)
-      Leaf Slice.{extractee; lo; hi}
-    | And l -> let* l = mapList (slice_map f) l in And l
-    | Or l  -> let* l = mapList (slice_map f) l in Or l
-    | Not a -> let* a = slice_map f a in Not a
+    | Leaf Slice.{ extractee; indices } -> 
+      let+ extractee = fterm extractee in
+      Leaf(Slice.build extractee ?indices)
+    | And l -> let+ l = mapList fother l in And l
+    | Or l  -> let+ l = mapList fother l in Or l
+    | Not a -> let+ a = fother a in Not a
 
-  let term_map = map
+  type _ modified =
+    | SameType  : 'a     -> 'a modified
+    | FreshTerm : Term.t -> _ bs base raw modified
 
-  let rec map (f : ExtTerm.t -> ExtTerm.t Monad.t) = function
-    | T a ->
-      let aux f t =
-        let* t = f(T t) in (* Should produce variants of the form (T _) *)
-        ExtTerm.to_term t  (* Hence to_term should be (T t) -> t *)
+  type update = { apply : 'a. 'a base raw -> 'a base raw modified Monad.t }
+
+  let map : type a b. update -> (b,a Types.termstruct) ExtTerm.ext -> (b,a Types.termstruct) ExtTerm.ext Monad.t = fun f -> function
+
+    | T a      ->
+      let aux (t : Term.t) = let+ SameType(T t) = f.apply(T t) in t in
+      let+ a = term_map aux a in
+      T a
+
+    | Slice slice    ->
+      let fterm t  = let+ SameType(T r) = f.apply(T t) in r in
+      let fother t =
+        let+ r = f.apply(Slice t) in
+        match r with
+        | SameType(Slice slice) -> slice
+        | FreshTerm extractee   -> Leaf(Slice.build extractee)
       in
-      let* a = term_map (aux f) a in T a
-    | Block(Slice slice) -> 
-      let open Block in
-      let* slice = slice_map f slice in
-      Block(Slice slice)
-    | Block(Bits _) as bits -> return bits
-    | Concat l ->
-      let open Block in
-      let* blocks = mapList f l in Concat blocks
+      let+ slice  = slice_map fterm fother slice in
+      Slice slice
+
+    | Bits _ as bits -> return bits (* We compute no variants there *)
+
+    | Concat l       ->
+      let aux (Block block) =
+        let+ r = f.apply block in
+        match r with
+        | SameType r          -> Block r
+        | FreshTerm extractee -> Block(Slice(Leaf(Slice.build extractee)))
+      in
+      let+ blocks = mapList aux l in Concat blocks
 end
 
 type subst = {
@@ -934,10 +1079,14 @@ let rec solve
     Term.pp x
     ExtTerm.pp uneval
     Term.pp eval;
+  let open ExtTerm in
+  let solve a = solve_aux x cons a eval ~uneval_left ~polarity epsilons in
   match uneval with
-  | ExtTerm.T e when Term.equal e x ->
-    begin
-      (* Particular case when the 1st argument is x itself - end of recursion *)
+  | ExtTerm(Bits bits)     -> solve(Bits bits)
+  | ExtTerm(Slice slice)   -> solve(Slice slice)
+  | ExtTerm(Concat _ as l) -> solve l
+  | ExtTerm(T e as uneval) when Term.equal e x ->
+    begin (* Particular case when the 1st argument is x itself - end of recursion *)
       try
         print 4 "@[<2>uneval is the variable@]@,";
         let subst = 
@@ -946,24 +1095,26 @@ let rec solve
           | _ ->
             let phi = getIC x cons ~uneval ~eval ~uneval_left ~polarity in
             let typ = Term.type_of_term x in
-            let y = Term.new_uninterpreted typ in
-            let b = make_lit cons ~uneval:y ~eval ~uneval_left ~polarity in
+            let y   = Term.new_uninterpreted typ in
+            let b   = make_lit cons ~uneval:y ~eval ~uneval_left ~polarity in
             { body = y; epsilons = Term.(phi ==> b)::epsilons }
         in
-        if not(fv x eval)
+        if not(term_fv x eval)
         then Substs.eliminate subst
         else Substs.nonlinear subst
       with NotImplemented -> Substs.nil
     end
-  | ExtTerm.T e ->
-    let Term a = Term.reveal e in
-    solve_aux x cons (ExtTerm.T a) eval ~uneval_left ~polarity epsilons
-  | ExtTerm.Block block ->
-    solve_aux x cons (ExtTerm.Block block) eval ~uneval_left ~polarity epsilons
-  | ExtTerm.Concat l ->
-    solve_aux x cons (ExtTerm.Concat l) eval ~uneval_left ~polarity epsilons
+  | ExtTerm(T e) -> (* General case *)
+    match Term.reveal e with
+    | Term(Astar(`YICES_BV_ARRAY, bits)) -> (* In case of a BV_ARRAY, we preprocess *)
+      begin match bvarray bits with
+        | [Block(Bits bits)]   -> solve(Bits bits)
+        | [Block(Slice slice)] -> solve(Slice slice)
+        | l                    -> solve(Concat l)
+      end
+    | Term a -> solve(T a) (* Otherwise we let solve_aux analyse the term structure *)
 
-and solve_aux : type a. Term.t -> pred -> a Types.termstruct ExtTerm.ext -> Term.t ->
+and solve_aux : type a b. Term.t -> pred -> (b,a Types.termstruct) ExtTerm.ext -> Term.t ->
   uneval_left:bool -> polarity:bool -> Term.t list -> subst list -> Substs.substs
   = fun (x : Term.t)
     (cons : pred)
@@ -1005,48 +1156,56 @@ and solve_aux : type a. Term.t -> pred -> a Types.termstruct ExtTerm.ext -> Term
     in
     let open Types in
     let open ExtTerm in
-    let a = match a with
-      | T (Astar(`YICES_BV_ARRAY, bits)) ->
-        begin match bvarray bits with
-          | [s] -> s
-          | l   -> Concat l
-        end
-      | a -> a
-    in
     match cons, a with (* We analyse the top-level predicate and its 1st argument e *)
 
-    | `YICES_EQ_TERM, Concat blocks ->
+    | _, Slice(Leaf{ extractee; indices = None }) ->
+      [ExtTerm(T extractee), t] |> recurs_call []
+
+    | `YICES_EQ_TERM, Slice(Not a) ->
+      [ExtTerm(Slice a), Term.BV.bvnot t] |> recurs_call []
+
+    | `YICES_EQ_TERM, Concat blocks when polarity ->
        getInverseConcat x t blocks |> recurs_call []
 
     | `YICES_EQ_TERM, T(BV_Sum l) when test_poly l ->
       getInversePoly x t l |> recurs_call []
 
     | _ ->
-      let aux (e_i : ExtTerm.t) =
-        print 4 "@[<2>aux on e_i = %a@]@," ExtTerm.pp e_i;
+      let open ExtTerm in
+      let apply : type a. a base raw -> a base raw Variants.modified Monad.t = fun e_i ->
+        print 4 "@[<2>aux on e_i = %a@]@," ExtTerm.pp_raw e_i;
         let variants = lazy(
           if ExtTerm.fv x e_i
-        then
-          begin
-            print 4 "@[<2>Detecting possible modif@]@,";
-            let typ = ExtTerm.typeof e_i in
-            let x'  = Term.new_uninterpreted typ in
-            let variant = ExtTerm.T x', (x', e_i) in
-            `Cons(variant, LazyList.empty)
-          end
-        else `Nil)
-      in
-      Monad.{ original = e_i; variants }
+          then
+            begin
+              print 4 "@[<2>Detecting possible modif@]@,";
+              let typ     = ExtTerm.typeof e_i in
+              let x'      = Term.new_uninterpreted typ in
+              let open Variants in
+              let modified : a base raw modified =
+                match e_i with
+                | T _     -> SameType(T x')
+                | Slice _ -> FreshTerm x'
+                | Bits _  -> FreshTerm x'
+              in
+              let variant = modified,
+                            Monad.{ variable = x' ; standing4 = ExtTerm e_i }
+              in
+              `Cons(variant, LazyList.empty)
+            end
+          else `Nil)
+        in
+      Monad.{ original = SameType e_i; variants }
     in
-    let variants = Variants.map aux a in
-    let treat dx'_raw (x', e_i) solutions = try
+    let variants = Variants.map { apply } a in
+    let treat dx'_raw Monad.{ variable = x' ; standing4 = e_i } solutions = try
         print 4 "@[<2>aux on head = %a@]@," ExtTerm.pp e_i;
         let dx' = ExtTerm.build dx'_raw in
-        print 4 "@[<2>dx' built as %a@]@," ExtTerm.pp dx';
+        print 4 "@[<2>dx' built as %a@]@," ExtTerm.pp (ExtTerm dx');
         let phi = getIC x' cons ~uneval:dx' ~eval:t ~uneval_left ~polarity in
         print 4 "@[<2>getIC gave us %a@]@," Term.pp phi;
         let typ = Term.type_of_term x' in
-        let y   = Term.new_variable typ in
+        let y   = Term.new_uninterpreted typ in
         let dy  = Term.subst_term [x',y] (ExtTerm.to_term dx') in
         let b   = make_lit cons ~uneval:dy ~eval:t ~uneval_left ~polarity in
         solve x `YICES_EQ_TERM ~uneval:e_i ~eval:y ~uneval_left:true ~polarity:true
@@ -1070,6 +1229,7 @@ let solve_atom
     (polarity : bool)
     epsilons  (* The specs of the epsilon terms we have created in the recursive solve descent *)
   =
+  let open ExtTerm in
   let Types.A2(cons,e,t) = atom in
   print 4 "@[<2>solve_atom %a with lhs = %a and rhs = %a@]@,"
     Term.pp x
@@ -1077,27 +1237,27 @@ let solve_atom
     Term.pp t;
   match cons with
   | `YICES_EQ_TERM | `YICES_BV_GE_ATOM | `YICES_BV_SGE_ATOM as cons ->
-    if fv x t
-    then if fv x e
+    if term_fv x t
+    then if term_fv x e
       then match cons with
         | `YICES_EQ_TERM when Term.is_bitvector t || Term.is_arithmetic t ->
           print 6 "@[<2>Present on both sides, and is bv or arith@]@,";
           let uneval, eval =
             if Term.is_bitvector t
-            then Term.BV.bvsub t e, Term.BV.bvconst_zero ~width:(width t)
+            then Term.BV.bvsub t e, Term.BV.bvconst_zero ~width:(term_width t)
             else Term.Arith.sub t e, Term.Arith.zero()
           in
-          solve x `YICES_EQ_TERM ~uneval:(T uneval) ~eval ~uneval_left:true ~polarity epsilons
+          solve x `YICES_EQ_TERM ~uneval:(return uneval) ~eval ~uneval_left:true ~polarity epsilons
         | _ ->
           print 6 "@[<2>Present on both sides, and is not bv or arith@]@,";
-          solve x cons ~uneval:(T e) ~eval:t ~uneval_left:true ~polarity epsilons
-          ||> solve x cons ~uneval:(T t) ~eval:e ~uneval_left:false ~polarity epsilons
+          solve x cons ~uneval:(return e) ~eval:t ~uneval_left:true ~polarity epsilons
+          ||> solve x cons ~uneval:(return t) ~eval:e ~uneval_left:false ~polarity epsilons
       else
         (print 6 "@[<2>Present on rhs only@]@,";
-         solve x cons ~uneval:(T t) ~eval:e ~uneval_left:false ~polarity epsilons)
+         solve x cons ~uneval:(return t) ~eval:e ~uneval_left:false ~polarity epsilons)
     else
       (print 6 "@[<2>Present on lhs only@]@,";
-       solve x cons ~uneval:(T e) ~eval:t ~uneval_left:true ~polarity epsilons)
+       solve x cons ~uneval:(return e) ~eval:t ~uneval_left:true ~polarity epsilons)
   | _ -> assert false
 
 

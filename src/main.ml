@@ -236,6 +236,7 @@ module SolverState = struct
     val universals   : Term.t list
     val existentials : Term.t list
     val context  : Context.t
+    (* val learnt : Term.t list ref *)
   end
 
   type t = (module T)
@@ -271,6 +272,7 @@ module SolverState = struct
     let () = Context.assert_formula context ground
     let () = Context.assert_formulas context existentials
     let () = Context.assert_formulas context universals
+    (* let learnt = ref [] *)
   end : T)
 
   let free (module G : T) =
@@ -345,7 +347,7 @@ let generalize_model model formula oldvar newvar : Term.t LazyList.t * Term.t li
   epsilons
 
 
-let rec solve state level model support : answer = try
+let rec solve state ?name level model support : answer = try
     let (module S:SolverState.T) = state in
     let open S in
     print 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
@@ -377,19 +379,19 @@ let rec solve state level model support : answer = try
       let model = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         SModel.pp SModel.{support = List.append level.newvars support; model };
-      post_process state level model support
+      post_process state ?name level model support
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
   with
     ExceptionsErrorHandling.YicesException(_,report) ->
     raise (FromYicesException(state, level,report))
 
-and post_process state level model support =
-  match treat_sat state level model support with
+and post_process state ?name level model support =
+  match treat_sat state ?name level model support with
   | Some underapprox -> Sat underapprox
-  | None -> solve state level model support
+  | None -> solve state ?name level model support
 
-and treat_sat state level model support =
+and treat_sat state ?name level model support =
   let (module S:SolverState.T) = state in
   let open S in
 
@@ -411,6 +413,7 @@ and treat_sat state level model support =
       print 3 "@[<v2>Recording epsilons @,@[<v2>  %a@]@]@,"
         (List.pp Term.pp) epsilons;
       Context.assert_formulas context epsilons;
+      (* learnt := List.rev_append epsilons !learnt; *)
       let underapprox = LazyList.extract !underapprox seq in
       print 3 "@[<v2>Level %i model works, with reason@,@[<v2>  %a@]@]@,"
         level.id
@@ -437,12 +440,12 @@ and treat_sat state level model support =
 
       let support = o.selector::o.sublevel.rigid in
 
-      let recurs, model =
+      let recurs, model_with_selector_true =
         if Model.get_bool_value model o.selector
-        then
+        then (* The selector for this subformula is already true *)
           (print 4 "@[Model already makes %a true, we stick to the same model@]@,"
              pp_term o.selector;
-           post_process state o.sublevel model support, model)
+           post_process state ~name:o.name o.sublevel model support, model)
         else
         (* We extend the model by setting the selector to true *)
         let status =
@@ -452,8 +455,12 @@ and treat_sat state level model support =
         assert(Types.equal_smt_status status `STATUS_SAT);
         (* This is the extended model *)
         let model = Context.get_model o.selector_context ~keep_subst:true in
-        solve state o.sublevel model support, model
+        solve state ~name:o.name o.sublevel model support, model
 
+      in
+      let gen_model reason =
+        Model.generalize_model model_with_selector_true
+          reason [o.name;o.selector] `YICES_GEN_DEFAULT
       in
       (* We call ourselves recursively *)
       match recurs with
@@ -464,14 +471,23 @@ and treat_sat state level model support =
           level.id
           o.sublevel.id
           pp_term reason;
-        let gen_model =
-          Model.generalize_model model reason [o.name; o.selector] `YICES_GEN_DEFAULT
-        in
-        (* we add the reason and continue with the next opponents *)
-        print 4 "@[its projection is %a@]@,"
-          (List.pp pp_term) gen_model;
-        aux (List.append gen_model reasons) opponents
+        begin
+          match Context.check_with_model context model support with
+          | `STATUS_UNSAT ->
+            print 4 "@[We learned something that defeats this model@]@,";
+            None
+          | `STATUS_SAT   ->
+            let gen_model = gen_model reason in
+            (* we add the reason and continue with the next opponents *)
+            print 4 "@[its projection is %a@]@," (List.pp pp_term) gen_model;
+            aux (List.append gen_model reasons) opponents
+          | _ -> assert false
+        end
       | Sat reasons ->
+        print 4 "@[Back to level %i, we see from level %i answer Sat with reasons %a@]@,"
+          level.id
+          o.sublevel.id
+          (List.pp pp_term) reasons;
         assert(List.length reasons > 0);
         let aux reason =
           (* begin
@@ -483,13 +499,16 @@ and treat_sat state level model support =
            *   | _ -> assert false
            * end; *)
           (* We substitute o.name by true in case it appears in the reasons (is it possible?) *)
-          let gen_model =
-            Model.generalize_model model reason [o.name;o.selector] `YICES_GEN_DEFAULT
-          in
-          let learnt = Term.(o.name ==> not1 (andN gen_model)) in
-          Context.assert_formula context learnt;
+          let gen_model = gen_model reason in
+          let lemma = Term.(o.name ==> not1 (andN gen_model)) in
+          (* let lemma = match name with
+           *   | Some name -> Term.(name ||| lemma)
+           *   | None -> lemma
+           * in *)
+          Context.assert_formula context lemma;
+          (* learnt := lemma :: !learnt; *)
           print 1 "@]@,";
-          print 4 "@[<2>Learnt clause:@,%a@]@," pp_term learnt;
+          print 4 "@[<2>Learnt clause:@,%a@]@," pp_term lemma;
         in
         List.iter aux reasons;
         None
