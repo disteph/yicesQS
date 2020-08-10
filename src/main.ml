@@ -346,8 +346,7 @@ let generalize_model model formula oldvar newvar : Term.t LazyList.t * Term.t li
   LazyList.map (fun subst -> Term.subst_term subst formula) substs,
   epsilons
 
-
-let rec solve state ?name level model support : answer = try
+let rec solve state level model support : answer = try
     let (module S:SolverState.T) = state in
     let open S in
     print 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
@@ -379,24 +378,24 @@ let rec solve state ?name level model support : answer = try
       let model = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         SModel.pp SModel.{support = List.append level.newvars support; model };
-      post_process state ?name level model support
+      post_process state level model support
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
   with
     ExceptionsErrorHandling.YicesException(_,report) ->
     raise (FromYicesException(state, level,report))
 
-and post_process state ?name level model support =
-  match treat_sat state ?name level model support with
+and post_process state level model support =
+  match treat_sat state level model support with
   | Some underapprox -> Sat underapprox
-  | None -> solve state ?name level model support
+  | None -> solve state level model support
 
-and treat_sat state ?name level model support =
+and treat_sat state level model support =
   let (module S:SolverState.T) = state in
   let open S in
 
   (* Now we look at each forall formula that we have to satisfy, one by one *)
-  let rec aux reasons = function
+  let rec aux model reasons = function
 
     (* We have satisfied all forall formulae; our model is good! *)
     | [] ->
@@ -427,7 +426,7 @@ and treat_sat state ?name level model support =
       print 4 "@[Level %i does not need to be looked at as %a is false@]@,"
         o.sublevel.id
         pp_term o.name;
-      aux (Term.not1 o.name::reasons) opponents
+      aux model (Term.not1 o.name::reasons) opponents
 
     (* Here we have a forall formula o that is true in the model;
        we have to make a recursive call to play the corresponding sub-game *)
@@ -438,14 +437,17 @@ and treat_sat state ?name level model support =
 
       let open Level in
 
-      let support = o.selector::o.sublevel.rigid in
+      (* To the recursive call, we will feed values for the following variables *)
+      let recurs_support = o.selector::o.sublevel.rigid in
 
-      let recurs, model_with_selector_true =
+      (* Now we produce the model to feed the recursive call and perform the call.
+         We get back the status of the call and the model that we fed to it *)
+      let recurs_status, recurs_model =
         if Model.get_bool_value model o.selector
         then (* The selector for this subformula is already true *)
           (print 4 "@[Model already makes %a true, we stick to the same model@]@,"
              pp_term o.selector;
-           post_process state ~name:o.name o.sublevel model support, model)
+           post_process state o.sublevel model recurs_support, model)
         else
         (* We extend the model by setting the selector to true *)
         let status =
@@ -454,34 +456,48 @@ and treat_sat state ?name level model support =
         (* This should always work *)
         assert(Types.equal_smt_status status `STATUS_SAT);
         (* This is the extended model *)
-        let model = Context.get_model o.selector_context ~keep_subst:true in
-        solve state ~name:o.name o.sublevel model support, model
+        let recurs_model = Context.get_model o.selector_context ~keep_subst:true in
+        solve state o.sublevel recurs_model recurs_support, recurs_model
 
       in
-      let gen_model reason =
-        Model.generalize_model model_with_selector_true
-          reason [o.name;o.selector] `YICES_GEN_DEFAULT
-      in
-      (* We call ourselves recursively *)
-      match recurs with
+      (* elim_trigger eliminates the trigger variable from the explanations given by the
+         recursive call *)
+      let elim_trigger reason = Term.subst_term [o.selector,Term.true0()] reason in
+      match recurs_status with
       | Unsat reason ->
-        print 1 "@,";
-        (* We substitute o.name by true in case it appears in the reason (is it possible?) *)
-        print 4 "@[Back to level %i, we see from level %i answer Unsat with reason %a@]@,"
-          level.id
-          o.sublevel.id
-          pp_term reason;
         begin
-          match Context.check_with_model context model support with
-          | `STATUS_UNSAT ->
-            print 4 "@[We learned something that defeats this model@]@,";
-            None
-          | `STATUS_SAT   ->
-            let gen_model = gen_model reason in
+          print 1 "@,";
+          print 4 "@[Back to level %i, we see from level %i answer Unsat with reason %a@]@,"
+            level.id
+            o.sublevel.id
+            pp_term reason;
+          (* next moves on to the next opponent; with a model that may updated with what we've learnt. *)
+          let next model =
+            let reason = elim_trigger reason in
             (* we add the reason and continue with the next opponents *)
-            print 4 "@[its projection is %a@]@," (List.pp pp_term) gen_model;
-            aux (List.append gen_model reasons) opponents
-          | _ -> assert false
+            print 4 "@[Reason's projection is %a@]@," pp_term reason;
+            aux model (reason::reasons) opponents
+          in
+          match opponents with
+          | [] -> next model (* This was the last opponent. *)
+          | _::_ ->
+            (* If there is another opponent coming, we may want to update our current model
+               according to the lemmas we've learnt from the recursive call
+               and that our current model may be violating. *)
+            let support = match support with
+              (* If our own support is not empty, the first element is our own trigger:
+                 we keep it as well as the values passed to the recursive call but its own trigger *)
+              | mytrigger::_ -> mytrigger::o.sublevel.rigid
+              | [] -> o.sublevel.rigid (* otherwise we just keep those values *)
+            in
+            print 4 "@[Now checking whether our model %a violates anything we have learnt@]@,"
+              SModel.pp { model; support };
+            match Context.check_with_model context model support with
+            | `STATUS_SAT   -> Context.get_model context ~keep_subst:true |> next
+            | `STATUS_UNSAT -> 
+              print 4 "@[We learned something that defeats this model@]@,";
+              None
+            | _             -> assert false
         end
       | Sat reasons ->
         print 4 "@[Back to level %i, we see from level %i answer Sat with reasons %a@]@,"
@@ -499,12 +515,8 @@ and treat_sat state ?name level model support =
            *   | _ -> assert false
            * end; *)
           (* We substitute o.name by true in case it appears in the reasons (is it possible?) *)
-          let gen_model = gen_model reason in
-          let lemma = Term.(o.name ==> not1 (andN gen_model)) in
-          (* let lemma = match name with
-           *   | Some name -> Term.(name ||| lemma)
-           *   | None -> lemma
-           * in *)
+          let reason = elim_trigger reason in
+          let lemma = Term.(o.name ==> not1 reason) in
           Context.assert_formula context lemma;
           (* learnt := lemma :: !learnt; *)
           print 1 "@]@,";
@@ -514,7 +526,7 @@ and treat_sat state ?name level model support =
         None
   in
   print 1 "@[<v 1> ";
-  let result = aux [] level.foralls in
+  let result = aux model [] level.foralls in
   result
 
 
@@ -597,7 +609,6 @@ let treat filename =
   in
   List.iter treat sexps;
   print 1 "@[Exited gracefully@]@,"
-
 
 let print_file filename destination state =
   match !filedump with
