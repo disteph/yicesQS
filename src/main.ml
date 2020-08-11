@@ -210,32 +210,14 @@ module Game = struct
     end)
 end
 
-(* Supported models *)
-module SModel = struct
-
-  type t = {
-    support : Term.t list;
-    model   : Model.t
-  }
-
-  let pp fmt {support;model} =
-    let aux fmt u =
-      let v = Model.get_value_as_term model u in
-      Format.fprintf fmt "@[%a := %a@]" pp_term u pp_term v
-    in
-    match support with
-    | [] -> Format.fprintf fmt "[]"
-    | _ -> Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" aux) support
-
-end
-
 module SolverState = struct
 
   module type T = sig
     include Game.T
     val universals   : Term.t list
     val existentials : Term.t list
-    val context  : Context.t
+    val context           : Context.t (* Main context for the solver *)
+    val epsilons_context  : Context.t (* context with only epsilon term constraints at level 0 *)
     (* val learnt : Term.t list ref *)
   end
 
@@ -268,17 +250,62 @@ module SolverState = struct
     
   let create config (module G : Game.T) = (module struct
     include G
-    let context = Context.malloc ~config ()
+    let epsilons_context = Context.malloc ~config ()
+    let context          = Context.malloc ~config ()
     let () = Context.assert_formula context ground
     let () = Context.assert_formulas context existentials
     let () = Context.assert_formulas context universals
     (* let learnt = ref [] *)
   end : T)
 
+  let learn (module S : T) lemmas =
+    (* learnt := List.append lemma !S.learnt; *)
+    print 4 "@[<2>Learning %a@]@," (List.pp pp_term) lemmas;
+    Context.assert_formulas S.context lemmas
+
+  let record_epsilons ((module S : T) as state) epsilons =
+    print 3 "@[<v2>Recording epsilons @[<v2>  %a@]@]@,"
+      (List.pp Term.pp) epsilons;
+    (* Context.assert_formulas S.epsilons_context epsilons; *)
+    learn state epsilons
+
   let free (module G : T) =
     Context.free G.context;
     Level.free G.top_level
   
+end
+
+module Support = struct
+  
+  type t =
+    | Empty
+    | S of {
+        trigger : Term.t;
+        variables : Term.t list
+      } [@@deriving show]
+
+  let list = function
+    | Empty -> []
+    | S{ trigger; variables } -> trigger::variables
+end
+
+(* Supported models *)
+module SModel = struct
+
+  type t = {
+    support : Term.t list;
+    model   : Model.t
+  }
+
+  let pp fmt {support;model} =
+    let aux fmt u =
+      let v = Model.get_value_as_term model u in
+      Format.fprintf fmt "@[%a := %a@]" pp_term u pp_term v
+    in
+    match support with
+    | [] -> Format.fprintf fmt "[]"
+    | support -> Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" aux) support
+
 end
 
 
@@ -325,12 +352,19 @@ let build_table model oldvar newvar =
   List.iter treat_old oldvar;
   tbl
 
-let generalize_model model formula oldvar newvar : Term.t LazyList.t * Term.t list =
-  let formula, epsilons = IC.solve_all newvar formula in
+let generalize_model model formula_orig oldvar newvar : Term.t LazyList.t * Term.t list =
+  let formula, epsilons = IC.solve_all newvar formula_orig in
+  print 3 "@[<v2>Formula sent to IC is %a@]@," pp_term formula_orig;
+  print 3 "@[<v2>Formula returned by IC is %a@]@," pp_term formula;
+  (* let epsilons = [] in *)
   let tbl = build_table model oldvar newvar in
   let rec aux1 list : subst LazyList.t = match list with
     | []      -> LazyList.return []
     | (var, value, terms)::other_vars ->
+      print 3 "@[<v2>Trying to eliminate variable %a, with value %a and matching variables %a@]@,"
+        pp_term var
+        pp_term value
+        (List.pp pp_term) terms;
       let rest = aux1 other_vars in
       let rec aux2 = function
         | []    -> LazyList.map (fun subst -> (var,value)::subst) rest
@@ -346,24 +380,40 @@ let generalize_model model formula oldvar newvar : Term.t LazyList.t * Term.t li
   LazyList.map (fun subst -> Term.subst_term subst formula) substs,
   epsilons
 
+(* let check state level model support reason =
+ *   let (module S:SolverState.T) = state in
+ *   print 3 "@[<v2>Checking that our model %a@,satisfies reason %a@]@,"
+ *     SModel.pp { model; support }
+ *     pp_term reason;
+ *   Context.push S.epsilons_context;
+ *   Context.assert_formula S.epsilons_context (Term.not1 reason);
+ *   match Context.check_with_model S.epsilons_context model support with
+ *   | `STATUS_SAT   ->
+ *     print 3 "@[<v2>It does not satisfy it@]@,";
+ *     raise (BadUnder(state, level, reason))
+ *   | `STATUS_UNSAT ->
+ *     print 3 "@[<v2>It does satisfy it@]@,";
+ *     Context.pop S.epsilons_context
+ *   | _ -> assert false *)
+
 let rec solve state level model support : answer = try
     let (module S:SolverState.T) = state in
     let open S in
     print 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
       Level.pp level
-      SModel.pp { model; support };
+      SModel.pp { model; support = Support.list support };
 
     print 4 "@[Trying to solve over-approximations@]@,";
     let status = match support with
-      | [] -> Context.check context
-      | _  -> Context.check_with_model context model support
+      | Empty -> Context.check context
+      | S _   -> Context.check_with_model context model (Support.list support)
     in
     match status with
 
     | `STATUS_UNSAT ->
       let interpolant = match support with
-        | [] -> Term.false0()
-        | _ -> Context.get_model_interpolant context
+        | Empty -> Term.false0()
+        | S _   -> Context.get_model_interpolant context
       in
       if (Model.get_bool_value model interpolant)
       then raise (BadInterpolant(state, level, interpolant));
@@ -377,7 +427,7 @@ let rec solve state level model support : answer = try
     | `STATUS_SAT ->
       let model = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
-        SModel.pp SModel.{support = List.append level.newvars support; model };
+        SModel.pp SModel.{support = List.append level.newvars (Support.list support); model };
       post_process state level model support
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
@@ -386,7 +436,10 @@ let rec solve state level model support : answer = try
     raise (FromYicesException(state, level,report))
 
 and post_process state level model support =
-  match treat_sat state level model support with
+  print 1 "@[<v 1> ";
+  let result = treat_sat state level model support in
+  print 1 "@]@,";
+  match result with
   | Some underapprox -> Sat underapprox
   | None -> solve state level model support
 
@@ -395,11 +448,10 @@ and treat_sat state level model support =
   let open S in
 
   (* Now we look at each forall formula that we have to satisfy, one by one *)
-  let rec aux model reasons = function
+  let rec aux model cumulated_support reasons = function
 
     (* We have satisfied all forall formulae; our model is good! *)
     | [] ->
-      print 1 "@]@,";
       let reasons = Level.(level.ground)::reasons in
       (* We first aggregate the reasons why our model worked *)
       (* Any model satisfying true_of_model would have been a good model *)
@@ -409,10 +461,7 @@ and treat_sat state level model support =
       let seq, epsilons =
         generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
       in
-      print 3 "@[<v2>Recording epsilons @,@[<v2>  %a@]@]@,"
-        (List.pp Term.pp) epsilons;
-      Context.assert_formulas context epsilons;
-      (* learnt := List.rev_append epsilons !learnt; *)
+      SolverState.record_epsilons state epsilons;
       let underapprox = LazyList.extract !underapprox seq in
       print 3 "@[<v2>Level %i model works, with reason@,@[<v2>  %a@]@]@,"
         level.id
@@ -426,7 +475,7 @@ and treat_sat state level model support =
       print 4 "@[Level %i does not need to be looked at as %a is false@]@,"
         o.sublevel.id
         pp_term o.name;
-      aux model (Term.not1 o.name::reasons) opponents
+      aux model (o.name::cumulated_support) (Term.not1 o.name::reasons) opponents
 
     (* Here we have a forall formula o that is true in the model;
        we have to make a recursive call to play the corresponding sub-game *)
@@ -438,7 +487,7 @@ and treat_sat state level model support =
       let open Level in
 
       (* To the recursive call, we will feed values for the following variables *)
-      let recurs_support = o.selector::o.sublevel.rigid in
+      let recurs_support = Support.S{ trigger = o.selector; variables = o.sublevel.rigid } in
 
       (* Now we produce the model to feed the recursive call and perform the call.
          We get back the status of the call and the model that we fed to it *)
@@ -471,29 +520,35 @@ and treat_sat state level model support =
             level.id
             o.sublevel.id
             pp_term reason;
-          (* next moves on to the next opponent; with a model that may updated with what we've learnt. *)
-          let next model =
-            let reason = elim_trigger reason in
+          (* We first eliminate the trigger from the reason... *)
+          let reason = elim_trigger reason in
+          print 4 "@[Reason's projection is %a@]@," pp_term reason;
+          (* ...and check that our current model indeed satisfies it. *)
+          (* check state level model o.sublevel.rigid reason; *)
+          (* next moves on to the next opponent;
+             with a cumulated support and a model that may updated with what we've learnt. *)
+          let next cumulated_support model =
             (* we add the reason and continue with the next opponents *)
-            print 4 "@[Reason's projection is %a@]@," pp_term reason;
-            aux model (reason::reasons) opponents
+            aux model cumulated_support (reason::reasons) opponents
           in
           match opponents with
-          | [] -> next model (* This was the last opponent. *)
+          | _ -> next cumulated_support model (* This was the last opponent. *)
           | _::_ ->
             (* If there is another opponent coming, we may want to update our current model
                according to the lemmas we've learnt from the recursive call
                and that our current model may be violating. *)
-            let support = match support with
-              (* If our own support is not empty, the first element is our own trigger:
-                 we keep it as well as the values passed to the recursive call but its own trigger *)
-              | mytrigger::_ -> mytrigger::o.sublevel.rigid
-              | [] -> o.sublevel.rigid (* otherwise we just keep those values *)
+            (* We first augment the cumulated support with those variables that matter for
+               reason to hold *)
+            let var_that_matter = Model.model_term_support model reason in
+            (* Then we add them to the cumulative support *)
+            let cumulated_support =
+              List.sorted_merge_uniq ~cmp:Term.compare var_that_matter cumulated_support
             in
             print 4 "@[Now checking whether our model %a violates anything we have learnt@]@,"
-              SModel.pp { model; support };
-            match Context.check_with_model context model support with
-            | `STATUS_SAT   -> Context.get_model context ~keep_subst:true |> next
+              SModel.pp { model; support = cumulated_support };
+            match Context.check_with_model context model cumulated_support with
+            | `STATUS_SAT  ->
+              Context.get_model context ~keep_subst:true |> next cumulated_support
             | `STATUS_UNSAT -> 
               print 4 "@[We learned something that defeats this model@]@,";
               None
@@ -506,28 +561,21 @@ and treat_sat state level model support =
           (List.pp pp_term) reasons;
         assert(List.length reasons > 0);
         let aux reason =
-          (* begin
-           *   Context.push context;
-           *   Context.assert_formula context (Term.not1 reason);
-           *   match Context.check_with_model context model support with
-           *   | `STATUS_SAT   -> raise (BadUnder(state, level, reason))
-           *   | `STATUS_UNSAT -> Context.pop context
-           *   | _ -> assert false
-           * end; *)
-          (* We substitute o.name by true in case it appears in the reasons (is it possible?) *)
           let reason = elim_trigger reason in
+          (* check state level model o.sublevel.rigid reason; *)
           let lemma = Term.(o.name ==> not1 reason) in
-          Context.assert_formula context lemma;
-          (* learnt := lemma :: !learnt; *)
-          print 1 "@]@,";
-          print 4 "@[<2>Learnt clause:@,%a@]@," pp_term lemma;
+          SolverState.learn state [lemma]
         in
         List.iter aux reasons;
         None
   in
-  print 1 "@[<v 1> ";
-  let result = aux model [] level.foralls in
-  result
+  let cumulated_support = match support with
+    (* If our own support is not empty, the first element is our own trigger:
+       we keep it as well as the values passed to the recursive call but its own trigger *)
+    | S{ trigger } -> [trigger]
+    | Empty -> [] (* otherwise we just keep those values *)
+  in
+  aux model cumulated_support [] level.foralls
 
 
 let () = assert(Global.has_mcsat())
@@ -584,7 +632,7 @@ let treat filename =
           print 2 "@]@,";
           let initial_state = SolverState.create session.config game in
           print 1 "@[<v>";
-          let answer = solve initial_state G.top_level (Model.from_map []) [] in
+          let answer = solve initial_state G.top_level (Model.from_map []) Support.Empty in
           print 1 "@]@,";
           let str = match answer, !expected with
             | Unsat _, None -> "unsat?"

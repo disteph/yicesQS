@@ -18,7 +18,7 @@ module LazyList = struct
 
   let rec length l = match Lazy.force l with
     | `Nil -> 0
-    | `Cons(_,l) -> length l
+    | `Cons(_,l) -> length l+1
 
   let rec fold : ('b Lazy.t -> 'a -> 'b) -> 'b Lazy.t -> 'a t -> 'b Lazy.t
     = fun f seed l -> lazy (match Lazy.force l with
@@ -470,7 +470,7 @@ let getIC : type a. Term.t
    *   in
    *   aux [] l
    * in *)
-  print 4 "@[<2>getIC on %s%a with uneval = %a (%s) and eval = %a (%s)@]@,"
+  print 6 "@[<2>getIC on %s%a with uneval = %a (%s) and eval = %a (%s)@]@,"
     (if polarity then "" else "the negation of ")
     Types.pp_term_constructor (match cons with
         | `YICES_BV_GE_ATOM  -> `YICES_BV_GE_ATOM
@@ -1075,7 +1075,7 @@ let rec solve
   (* The specs of the epsilon terms we have created in the recursive solve descent *)
   : subst list -> Substs.substs
   =
-  print 4 "@[<2>solve with var = %a, uneval = %a and eval = %a@]@,"
+  print 6 "@[<2>solve with var = %a, uneval = %a and eval = %a@]@,"
     Term.pp x
     ExtTerm.pp uneval
     Term.pp eval;
@@ -1088,7 +1088,7 @@ let rec solve
   | ExtTerm(T e as uneval) when Term.equal e x ->
     begin (* Particular case when the 1st argument is x itself - end of recursion *)
       try
-        print 4 "@[<2>uneval is the variable@]@,";
+        print 6 "@[<2>uneval is the variable@]@,";
         let subst = 
           match cons with
           | `YICES_EQ_TERM when polarity -> { body = eval; epsilons }
@@ -1123,7 +1123,7 @@ and solve_aux : type a b. Term.t -> pred -> (b,a Types.termstruct) ExtTerm.ext -
     ~uneval_left
     ~polarity
     (epsilons : Term.t list) ->
-    print 4 "@[<2>uneval is not the variable@]@,";
+    print 6 "@[<2>uneval is not the variable@]@,";
     (* The recursive call is parameterised by e_i and t *)
     let treat e_i t' = solve x cons ~uneval:e_i ~eval:t' ~uneval_left ~polarity epsilons in
     let rec treat_nl = function
@@ -1173,12 +1173,12 @@ and solve_aux : type a b. Term.t -> pred -> (b,a Types.termstruct) ExtTerm.ext -
     | _ ->
       let open ExtTerm in
       let apply : type a. a base raw -> a base raw Variants.modified Monad.t = fun e_i ->
-        print 4 "@[<2>aux on e_i = %a@]@," ExtTerm.pp_raw e_i;
+        print 6 "@[<2>aux on e_i = %a@]@," ExtTerm.pp_raw e_i;
         let variants = lazy(
           if ExtTerm.fv x e_i
           then
             begin
-              print 4 "@[<2>Detecting possible modif@]@,";
+              print 6 "@[<2>Detecting possible modif@]@,";
               let typ     = ExtTerm.typeof e_i in
               let x'      = Term.new_uninterpreted typ in
               let open Variants in
@@ -1199,11 +1199,11 @@ and solve_aux : type a b. Term.t -> pred -> (b,a Types.termstruct) ExtTerm.ext -
     in
     let variants = Variants.map { apply } a in
     let treat dx'_raw Monad.{ variable = x' ; standing4 = e_i } solutions = try
-        print 4 "@[<2>aux on head = %a@]@," ExtTerm.pp e_i;
+        print 6 "@[<2>treat on var %a standing for head %a@]@," Term.pp x' ExtTerm.pp e_i;
         let dx' = ExtTerm.build dx'_raw in
-        print 4 "@[<2>dx' built as %a@]@," ExtTerm.pp (ExtTerm dx');
+        print 6 "@[<2>with dx' being %a@]@," ExtTerm.pp (ExtTerm dx');
         let phi = getIC x' cons ~uneval:dx' ~eval:t ~uneval_left ~polarity in
-        print 4 "@[<2>getIC gave us %a@]@," Term.pp phi;
+        print 6 "@[<2>getIC gave us %a@]@," Term.pp phi;
         let typ = Term.type_of_term x' in
         let y   = Term.new_uninterpreted typ in
         let dy  = Term.subst_term [x',y] (ExtTerm.to_term dx') in
@@ -1211,7 +1211,7 @@ and solve_aux : type a b. Term.t -> pred -> (b,a Types.termstruct) ExtTerm.ext -
         solve x `YICES_EQ_TERM ~uneval:e_i ~eval:y ~uneval_left:true ~polarity:true
           (Term.(phi ==> b)::epsilons) solutions
       with NotImplemented ->
-        print 4 "Not implemented@,";
+        print 6 "Not implemented@,";
         NonLinear solutions
     in
     let aux nexts (dx'_raw, modif) solutions =
@@ -1231,7 +1231,7 @@ let solve_atom
   =
   let open ExtTerm in
   let Types.A2(cons,e,t) = atom in
-  print 4 "@[<2>solve_atom %a with lhs = %a and rhs = %a@]@,"
+  print 6 "@[<2>solve_atom %a with lhs = %a and rhs = %a@]@,"
     Term.pp x
     Term.pp e
     Term.pp t;
@@ -1264,7 +1264,6 @@ let solve_atom
 let solve_lit x lit substs =
   let open Term in
   let open Types in
-  print 1 "@[<v2>solve_lit looks at@,%a@," Term.pp lit;
   let aux b t =
     let r =
       if Term.equal x t then
@@ -1272,10 +1271,13 @@ let solve_lit x lit substs =
         Substs.eliminate {body; epsilons = []} substs
       else
         match reveal t with
-        | Term(A2 _ as atom) when fv x t -> solve_atom x atom b [] substs
+        | Term(A2 _ as atom) when fv x t ->
+          print 5 "@[<v2>solve_lit looks at@,%a@," Term.pp lit;
+          let r = solve_atom x atom b [] substs in
+          print 5 "@[<2>which turns into %a@]@]@," (Substs.pp_substs x) r;
+          r
         | _ -> Substs.nil substs
     in
-    print 1 "@[<2>which turns into %a@]@]@," (Substs.pp_substs x) r;
     r
   in
   match reveal lit with
@@ -1284,7 +1286,7 @@ let solve_lit x lit substs =
 
 
 let solve_list conjuncts old_epsilons x : Term.t list * Term.t list * bool =
-  print 3 "@[<hv2>solve_list solves %a from@,%a@,@[<v>"
+  print 5 "@[<hv2>solve_list solves %a from@,%a@,@[<v>"
     Term.pp x
     (List.pp Term.pp) conjuncts;
   let rec aux treated accu = function
@@ -1292,11 +1294,18 @@ let solve_list conjuncts old_epsilons x : Term.t list * Term.t list * bool =
       begin match accu with
         | [Some not_faithful, {body; epsilons}] ->
           print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
+          (* let aux conjunct =
+           *   let new_conjunct = Term.subst_term [x,body] conjunct in
+           *   if not (Term.equal conjunct new_conjunct)
+           *   then
+           *     print 5 "@[<2>Turning conjunct %a into %a@]@," Term.pp conjunct Term.pp new_conjunct
+           * in
+           * List.iter aux conjuncts; *)
           Term.subst_terms [x,body] conjuncts,
           epsilons @ Term.subst_terms [x,body] old_epsilons,
           not_faithful()
         | _ ->
-          print 5 "@[<2>solve_list does not substitute@]@,";
+          (* print 5 "@[<2>solve_list does not substitute@]@,"; *)
           conjuncts, old_epsilons, true
       end
       
@@ -1305,6 +1314,13 @@ let solve_list conjuncts old_epsilons x : Term.t list * Term.t list * bool =
 
       | Eliminate { body; epsilons = [] } ->
         print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
+        (* let aux conjunct =
+         *   let new_conjunct = Term.subst_term [x,body] conjunct in
+         *   if not (Term.equal conjunct new_conjunct)
+         *   then
+         *     print 5 "@[<2>Turning conjunct %a into %a@]@," Term.pp conjunct Term.pp new_conjunct
+         * in
+         * List.iter aux conjuncts; *)
         Term.subst_terms [x,body] conjuncts, Term.subst_terms [x,body] old_epsilons, false
 
       | Eliminate subst  ->
@@ -1324,7 +1340,7 @@ let solve_list conjuncts old_epsilons x : Term.t list * Term.t list * bool =
         aux (lit::treated) (aux2 accu substs) tail
   in
   let result = aux [] [] conjuncts in
-  print 3 "@]@]@,";
+  print 5 "@]@]@,";
   result
 
 
@@ -1338,14 +1354,14 @@ let solve_all vars t =
   in
   let conjuncts =
     match reveal t with
-    | Term(A1(`YICES_NOT_TERM, t)) -> aux t |> List.map Term.not1
+    | Term(A1(`YICES_NOT_TERM, t)) ->
+      aux t |> List.map Term.not1 |> List.sort_uniq ~cmp:Term.compare
     | _ -> [t]
   in
   print 3 "@[<2>IC analyses %a@]@," Term.pp t;
   let rec aux conjuncts epsilons = function
     | [] -> conjuncts, epsilons
     | x::vars ->
-      print 3 "@[<2>solve_all_aux@]@,";
       match solve_list conjuncts epsilons x with
       | _, _, true                 -> aux conjuncts epsilons vars
       | conjuncts, epsilons, false -> aux conjuncts epsilons vars
