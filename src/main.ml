@@ -492,12 +492,12 @@ and treat_sat state level model support =
       (* Now we produce the model to feed the recursive call and perform the call.
          We get back the status of the call and the model that we fed to it *)
       let recurs_status, recurs_model =
-        if Model.get_bool_value model o.selector
-        then (* The selector for this subformula is already true *)
-          (print 4 "@[Model already makes %a true, we stick to the same model@]@,"
-             pp_term o.selector;
-           post_process state o.sublevel model recurs_support, model)
-        else
+        (* if Model.get_bool_value model o.selector
+         * then (\* The selector for this subformula is already true *\)
+         *   (print 4 "@[Model already makes %a true, we stick to the same model@]@,"
+         *      pp_term o.selector;
+         *    post_process state o.sublevel model recurs_support, model)
+         * else *)
         (* We extend the model by setting the selector to true *)
         let status =
           Context.check_with_model o.selector_context model o.sublevel.rigid
