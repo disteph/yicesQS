@@ -546,7 +546,7 @@ and treat_sat state level model support =
             aux model cumulated_support (reason::reasons) opponents
           in
           match opponents with
-          | _ -> next cumulated_support model (* This was the last opponent. *)
+          | [] -> next cumulated_support model (* This was the last opponent. *)
           | _::_ ->
             (* If there is another opponent coming, we may want to update our current model
                according to the lemmas we've learnt from the recursive call
