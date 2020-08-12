@@ -352,7 +352,7 @@ let build_table model oldvar newvar =
   List.iter treat_old oldvar;
   tbl
 
-let generalize_model model formula_orig oldvar newvar : Term.t LazyList.t * Term.t list =
+let generalize_model model formula_orig oldvar newvar : (Term.t * Term.t list) LazyList.t =
   let formula, epsilons = IC.solve_all newvar formula_orig in
   print 3 "@[<v2>Formula sent to IC is %a@]@," pp_term formula_orig;
   print 3 "@[<v2>Formula returned by IC is %a@]@," pp_term formula;
@@ -377,8 +377,11 @@ let generalize_model model formula_orig oldvar newvar : Term.t LazyList.t * Term
     var, value, THash.find tbl value
   in
   let substs = newvar |> List.map aux |> aux1 in
-  LazyList.map (fun subst -> Term.subst_term subst formula) substs,
-  epsilons
+  let aux subst =
+    Term.subst_term subst formula,
+    Term.subst_terms subst epsilons
+  in
+  LazyList.map aux substs
 
 (* let check state level model support reason =
  *   let (module S:SolverState.T) = state in
@@ -458,11 +461,22 @@ and treat_sat state level model support =
       let true_of_model = Term.andN reasons in
       print 4 "@[<2>true of model is@ @[<v>%a@]@]@," pp_term true_of_model;
       (* Now compute several projections of the reason on the rigid variables *)
-      let seq, epsilons =
+      let seq =
         generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
       in
+      let rec extract (accu : Term.t list) (epsilons : Term.t list) n l : Term.t list * Term.t list =
+        if n <= 0 then accu, epsilons
+        else
+          match Lazy.force l with
+          | `Nil -> accu, epsilons
+          | `Cons((head, epsilons_local), tail) -> 
+            match epsilons_local, epsilons with
+            | [], epsilons
+            | epsilons, [] -> extract (head::accu) epsilons (n-1) tail
+            | _::_, _::_   -> extract accu epsilons (n-1) tail
+      in
+      let underapprox, epsilons = extract [] [] !underapprox seq in
       SolverState.record_epsilons state epsilons;
-      let underapprox = LazyList.extract !underapprox seq in
       print 3 "@[<v2>Level %i model works, with reason@,@[<v2>  %a@]@]@,"
         level.id
         (List.pp pp_term)
