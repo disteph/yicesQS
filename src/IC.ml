@@ -102,6 +102,18 @@ module BoolStruct = struct
     | Not of 'a t
   [@@deriving eq, show]
 
+  let rec compare compare_leaf t1 t2 = match t1, t2 with
+    | Leaf t1, Leaf t2 -> compare_leaf t1 t2
+    | And l1, And l2
+    | Or l1, Or l2 -> List.compare (compare compare_leaf) l1 l2
+    | Not t1, Not t2 -> compare compare_leaf t1 t2
+    | Leaf _, _ -> -1
+    | _, Leaf _ -> 1
+    | Not _, _  -> -1
+    | _, Not _  -> 1
+    | Or _, _   -> -1
+    | _, Or _   -> -1
+
   let rec map f = function
     | Leaf a -> Leaf (f a)
     | And l -> And(List.map (map f) l)
@@ -148,6 +160,7 @@ end
 module SliceBlock = struct
   open BoolStruct
 
+  type bit = (Term.t * int) BoolStruct.t [@@deriving show, ord]
   type t = Slice.t BoolStruct.t [@@deriving show]
 
   let rec to_term = function
@@ -245,12 +258,13 @@ end
 let bvarray bits =
   let open Types in
   let open Option in
-
+  print 6 "@[<2>bvarray scans the array@,@[<v>%a@]@]@,"
+    (List.pp Term.pp) bits;
   (* Check if bit is t[i] *)
   let rec analyse bit =
     let open BoolStruct in
     match Term.reveal bit with
-    | Term(Projection(`YICES_BIT_TERM, i, t)) -> return (Leaf(i, t))
+    | Term(Projection(`YICES_BIT_TERM, i, t)) -> return (Leaf(t, i))
     | Term(A1(`YICES_NOT_TERM, bit)) ->
       let+ t = analyse bit in
       Not t 
@@ -262,13 +276,13 @@ let bvarray bits =
           aux (t::accu) tail
       in
       let+ t = aux [] l in
-      Or t
+      Or(List.fast_sort SliceBlock.compare_bit t)
     | _ -> None
   in
   let open ExtTerm in
   let init_slice bit = function
     | Some bstruct ->
-      let aux (i,extractee) = Slice.build extractee ~indices:(i, i+1) in
+      let aux (extractee,i) = Slice.build extractee ~indices:(i, i+1) in
       Block(Slice(BoolStruct.map aux bstruct))
     | None -> Block(Bits [bit])
   in
@@ -277,9 +291,10 @@ let bvarray bits =
     | Block(Bits l)      -> Block(Bits(List.rev l))
   in
   let rec test slice bit =
+    print 6 "@[Testing %a against %a@]@," SliceBlock.pp slice SliceBlock.pp_bit bit;
     let open BoolStruct in
     match slice, bit with
-    | Leaf Slice.{extractee; indices = Some(lo, hi) }, Leaf(i,t)
+    | Leaf Slice.{extractee; indices = Some(lo, hi) }, Leaf(t, i)
       when hi = i && Term.equal t extractee ->
       Option.return (Leaf(Slice.build extractee ~indices:(lo, hi+1)))
     | And l_slice, And l_bit ->
@@ -291,9 +306,11 @@ let bvarray bits =
     | Not slice, Not bit ->
       let+ slice = test slice bit in
       Not slice
-    | _ -> None
+    | _ ->
+      print 6 "@[Not matching: %a and %a@]@," SliceBlock.pp slice SliceBlock.pp_bit bit;
+      None
   and aux accu = function
-    | [], [] -> Option.return accu
+    | [], [] -> Option.return (List.rev accu)
     | (head_slice::tail_slice), (head_bit::tail_bit) ->
       let* slice = test head_slice head_bit in
       aux (slice::accu) (tail_slice, tail_bit)
@@ -301,17 +318,30 @@ let bvarray bits =
   in
   let open ExtTerm in
   let rec aux ?slice accu bits = match slice, accu, bits with
-    | Some slice, _, [] -> (close_slice slice)::accu (* we have finished, closing last slice *)
+    | Some slice, _, [] ->
+      print 6 "@[Closing last slice@]@,";
+      (close_slice slice)::accu (* we have finished, closing last slice *)
     | Some slice, _, bit::tail -> (* we had started and we have a new bit to look at *)
+      print 6 "@[We had started and we have a new bit to look at: %a@]@,"
+        Term.pp bit;
       let slice, accu = match slice, analyse bit with
         | Block(Slice s), (Some b as sbit) ->
           begin
+            print 6 "@[Had a slice, now getting new bit %a@]@," SliceBlock.pp_bit b;
             match test s b with
-            | Some s -> Block(Slice s), accu
-            | None -> init_slice bit sbit, (close_slice slice)::accu
+            | Some s ->
+              print 6 "@[In continuity@]@,";
+              Block(Slice s), accu
+            | None ->
+              print 6 "@[Not in continuity@]@,";
+              init_slice bit sbit, (close_slice slice)::accu
           end
-        | Block(Bits l), None -> Block(Bits(bit::l)), accu
-        | _, sbit -> init_slice bit sbit, (close_slice slice)::accu
+        | Block(Bits l), None ->
+          print 6 "@[analyse bit says None@]@,";
+          Block(Bits(bit::l)), accu
+        | _, sbit ->
+          print 6 "@[other@]@,";
+          init_slice bit sbit, (close_slice slice)::accu
       in
       aux ~slice accu tail
     | None, [], bit::tail -> (* initialisation *)
@@ -321,7 +351,11 @@ let bvarray bits =
     | None, _::_, _ (* No current slice but we have already accumulated slices *)
       -> assert false
   in
-  aux [] bits |> List.rev
+  let r = aux [] bits |> List.rev in
+  print 6 "@[<2>and produces@,@[<v>%a@]@]@,"
+    ExtTerm.pp_raw ExtTerm.(Concat r);
+  r
+
 
 
 (****************************************************************)
