@@ -530,7 +530,7 @@ and treat_sat state level model support =
       | Unsat reason ->
         begin
           print 1 "@,";
-          print 4 "@[Back to level %i, we see from level %i answer Unsat with reason %a@]@,"
+          print 4 "@[<v2>Back to level %i, we see from level %i answer Unsat with reason@,@[%a@]@]@,"
             level.id
             o.sublevel.id
             pp_term reason;
@@ -569,7 +569,7 @@ and treat_sat state level model support =
             | _             -> assert false
         end
       | Sat reasons ->
-        print 4 "@[Back to level %i, we see from level %i answer Sat with reasons %a@]@,"
+        print 4 "@[<v2>Back to level %i, we see from level %i answer Sat with reasons@,@[%a@]@]@,"
           level.id
           o.sublevel.id
           (List.pp pp_term) reasons;

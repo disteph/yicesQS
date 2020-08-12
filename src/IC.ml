@@ -1065,29 +1065,36 @@ let pp_subst x fmt { body; epsilons } =
 
 module Substs = struct
 
+  type not_great =
+    | Epsilon of subst
+    | NonLinear of Term.t list
+  
   type substs =
-    | Eliminate of subst  (* substitution eliminates variable AND
-                             faithfully represents literal from whence it came *)
-    | NonLinear of subst list
+    | Eliminate of Term.t  (* substitution eliminates variable AND
+                              faithfully represents literal from whence it came *)
+    | NotGreat of not_great
 
   let pp_substs x fmt = function
     | Eliminate s ->
-      Format.fprintf fmt "Elim %a" (pp_subst x) s
-    | NonLinear [] ->
+      Format.fprintf fmt "Elim %a" Term.pp s
+    | NotGreat(Epsilon subst) ->
+      Format.fprintf fmt "Epsilon %a" (pp_subst x) subst
+    | NotGreat(NonLinear []) ->
       Format.fprintf fmt "Nothing"
-    | NonLinear l ->
-      Format.fprintf fmt "NonLinear %a" (List.pp (pp_subst x)) l
+    | NotGreat(NonLinear l) ->
+      Format.fprintf fmt "NonLinear %a" (List.pp Term.pp) l
 
-  type t = subst list -> substs
+  type t = not_great -> substs
 
   let (||>) (a : t) f solutions =
     match a solutions with
-    | Eliminate body as result -> result
-    | NonLinear result         -> f result
+    | Eliminate _  as result -> result
+    | NotGreat not_great -> f not_great
   
-  let nil solutions = NonLinear solutions 
-  let eliminate subst _ = Eliminate subst 
-  let nonlinear subst solutions = NonLinear(subst :: solutions) 
+  let ident not_great   = NotGreat not_great
+  let nil = function
+    | NonLinear _ as l -> NotGreat l
+    | Epsilon _        -> NotGreat(NonLinear [])
 
 end
 open Substs
@@ -1108,7 +1115,7 @@ let rec solve
     ~polarity
     (epsilons : Term.t list)
   (* The specs of the epsilon terms we have created in the recursive solve descent *)
-  : subst list -> Substs.substs
+  : Substs.not_great -> Substs.substs
   =
   print 6 "@[<2>solve with var = %a, uneval = %a and eval = %a@]@,"
     Term.pp x
@@ -1117,9 +1124,9 @@ let rec solve
   let open ExtTerm in
   let solve a = solve_aux x cons a eval ~uneval_left ~polarity epsilons in
   match uneval with
-  | ExtTerm(Bits bits)     -> solve(Bits bits)
-  | ExtTerm(Slice slice)   -> solve(Slice slice)
-  | ExtTerm(Concat _ as l) -> solve l
+  | ExtTerm(Bits _ as bits)   -> solve bits
+  | ExtTerm(Slice _ as slice) -> solve slice
+  | ExtTerm(Concat _ as l)    -> solve l
   | ExtTerm(T e as uneval) when Term.equal e x ->
     begin (* Particular case when the 1st argument is x itself - end of recursion *)
       try
@@ -1134,23 +1141,30 @@ let rec solve
             let b   = make_lit cons ~uneval:y ~eval ~uneval_left ~polarity in
             { body = y; epsilons = Term.(phi ==> b)::epsilons }
         in
-        if not(term_fv x eval)
-        then Substs.eliminate subst
-        else Substs.nonlinear subst
-      with NotImplemented -> Substs.nil
+        let open Substs in
+        match subst.epsilons, not(term_fv x eval) with
+        | [], true  -> (fun _ -> Substs.Eliminate subst.body) (* No epsilon, no occurrence! *)
+        | [], false -> (function
+            | Epsilon _   -> Substs.NotGreat(NonLinear [subst.body]) 
+            | NonLinear l -> Substs.NotGreat(NonLinear (subst.body::l)))
+        | _::_, true -> (function (* Epsilon, no occurrence... maybe? *)
+            | NonLinear [] -> Substs.NotGreat(Epsilon subst) (* OK if no other solution *)
+            | solutions    -> Substs.nil solutions) (* Not OK otherwise *)
+        | _::_, false      -> Substs.nil (* Epsilon with occurrence -> trash *)
+      with NotImplemented  -> Substs.nil
     end
   | ExtTerm(T e) -> (* General case *)
     match Term.reveal e with
     | Term(Astar(`YICES_BV_ARRAY, bits)) -> (* In case of a BV_ARRAY, we preprocess *)
       begin match bvarray bits with
-        | [Block(Bits bits)]   -> solve(Bits bits)
-        | [Block(Slice slice)] -> solve(Slice slice)
-        | l                    -> solve(Concat l)
+        | [Block(Bits _ as bits)]   -> solve bits
+        | [Block(Slice _ as slice)] -> solve slice
+        | l                         -> solve(Concat l)
       end
     | Term a -> solve(T a) (* Otherwise we let solve_aux analyse the term structure *)
 
 and solve_aux : type a b. Term.t -> pred -> (b,a Types.termstruct) ExtTerm.ext -> Term.t ->
-  uneval_left:bool -> polarity:bool -> Term.t list -> subst list -> Substs.substs
+  uneval_left:bool -> polarity:bool -> Term.t list -> Substs.not_great -> Substs.substs
   = fun (x : Term.t)
     (cons : pred)
     a
@@ -1161,33 +1175,26 @@ and solve_aux : type a b. Term.t -> pred -> (b,a Types.termstruct) ExtTerm.ext -
     print 6 "@[<2>uneval is not the variable@]@,";
     (* The recursive call is parameterised by e_i and t *)
     let treat e_i t' = solve x cons ~uneval:e_i ~eval:t' ~uneval_left ~polarity epsilons in
+    (* treat_nl manages the recursive calls on the non-linear problems we have *)
     let rec treat_nl = function
-      | []             -> fun solutions -> solutions
-      | (e_i,t')::tail ->
-        let cont f solutions =
-          match treat e_i t' solutions with
-          | Eliminate subst     -> f (subst :: solutions)
-          | NonLinear solutions -> f solutions
-        in
-        treat_nl tail |> cont
+      | []             -> Substs.ident
+      | (e_i,t')::tail -> treat e_i t' ||> treat_nl tail
     in
     let rec recurs_call accu = function
-      | []              -> fun solutions -> NonLinear(treat_nl accu solutions)
+      | []              -> treat_nl accu
       | (e_i, t')::tail ->
         if fv x t'
-        then recurs_call accu tail (* Non-linear case goes in accumulator *)
-        (* then recurs_call ((e_i, t')::accu) tail (\* Non-linear case goes in accumulator *\) *)
+        then recurs_call ((e_i, t')::accu) tail (* Non-linear case goes in accumulator *)
         else treat e_i t' ||> recurs_call accu tail
-        (* Linear case treated immediately doesn't go further if it comes back with Linear subst *)
+        (* Linear case treated immediately doesn't go further if it comes back with Eliminate *)
     in
     let test_poly = function
+      | _::_::_ | [_, None] | [] -> true
       | [coeff, Some var] ->
-        begin match coeff with
+        match coeff with
           | true::tail when List.for_all (fun b -> b) tail -> true  (* coeff is -1 *)
           | true::tail when List.for_all (fun b -> not b) tail -> true (* coeff is 1 *)
           | _ -> false
-        end
-      | _ -> true
     in
     let open Types in
     let open ExtTerm in
@@ -1233,7 +1240,7 @@ and solve_aux : type a b. Term.t -> pred -> (b,a Types.termstruct) ExtTerm.ext -
       Monad.{ original = SameType e_i; variants }
     in
     let variants = Variants.map { apply } a in
-    let treat dx'_raw Monad.{ variable = x' ; standing4 = e_i } solutions = try
+    let treat dx'_raw Monad.{ variable = x' ; standing4 = e_i } = try
         print 6 "@[<2>treat on var %a standing for head %a@]@," Term.pp x' ExtTerm.pp e_i;
         let dx' = ExtTerm.build dx'_raw in
         print 6 "@[<2>with dx' being %a@]@," ExtTerm.pp (ExtTerm dx');
@@ -1244,17 +1251,13 @@ and solve_aux : type a b. Term.t -> pred -> (b,a Types.termstruct) ExtTerm.ext -
         let dy  = Term.subst_term [x',y] (ExtTerm.to_term dx') in
         let b   = make_lit cons ~uneval:dy ~eval:t ~uneval_left ~polarity in
         solve x `YICES_EQ_TERM ~uneval:e_i ~eval:y ~uneval_left:true ~polarity:true
-          (Term.(phi ==> b)::epsilons) solutions
+          (Term.(phi ==> b)::epsilons)
       with NotImplemented ->
         print 6 "Not implemented@,";
-        NonLinear solutions
+         Substs.nil
     in
-    let aux nexts (dx'_raw, modif) solutions =
-      match treat dx'_raw modif solutions with
-      | NonLinear _ as result -> result
-      | Eliminate _ as result -> result
-    in
-    let variants = LazyList.fold aux (lazy (fun substs -> NonLinear substs)) variants.variants in
+    let aux nexts (dx'_raw, modif) = treat dx'_raw modif in
+    let variants = LazyList.fold aux (lazy Substs.ident) variants.variants in
     Lazy.force variants
 
 
@@ -1300,34 +1303,30 @@ let solve_lit x lit substs =
   let open Term in
   let open Types in
   let aux b t =
-    let r =
-      if Term.equal x t then
-        let body = if b then Term.true0() else Term.false0() in
-        Substs.eliminate {body; epsilons = []} substs
-      else
-        match reveal t with
-        | Term(A2 _ as atom) when fv x t ->
-          print 5 "@[<v2>solve_lit looks at@,%a@," Term.pp lit;
-          let r = solve_atom x atom b [] substs in
-          print 5 "@[<2>which turns into %a@]@]@," (Substs.pp_substs x) r;
-          r
-        | _ -> Substs.nil substs
-    in
-    r
+    if Term.equal x t then
+      let body = if b then Term.true0() else Term.false0() in
+      Substs.Eliminate body
+    else
+      match reveal t with
+      | Term(A2 _ as atom) when fv x t ->
+        print 5 "@[<v2>solve_lit looks at@,%a@," Term.pp lit;
+        let r = solve_atom x atom b [] substs in
+        print 5 "@[<2>which turns into %a@]@]@," (Substs.pp_substs x) r;
+        r
+      | _ -> Substs.nil substs
   in
   match reveal lit with
   | Term(A1(`YICES_NOT_TERM, t')) -> aux false t'
   | _ -> aux true lit
 
-
-let solve_list conjuncts old_epsilons x : Term.t list * Term.t list * bool =
+let solve_list conjuncts old_epsilons x : Term.t list * Term.t list =
   print 5 "@[<hv2>solve_list solves %a from@,%a@,@[<v>"
     Term.pp x
     (List.pp Term.pp) conjuncts;
   let rec aux treated accu = function
     | [] ->
       begin match accu with
-        | [Some not_faithful, {body; epsilons}] ->
+        | Epsilon {body; epsilons} ->
           print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
           (* let aux conjunct =
            *   let new_conjunct = Term.subst_term [x,body] conjunct in
@@ -1337,17 +1336,16 @@ let solve_list conjuncts old_epsilons x : Term.t list * Term.t list * bool =
            * in
            * List.iter aux conjuncts; *)
           Term.subst_terms [x,body] conjuncts,
-          epsilons @ Term.subst_terms [x,body] old_epsilons,
-          not_faithful()
+          epsilons @ Term.subst_terms [x,body] old_epsilons
         | _ ->
           (* print 5 "@[<2>solve_list does not substitute@]@,"; *)
-          conjuncts, old_epsilons, true
+          conjuncts, old_epsilons
       end
       
     | lit::tail ->
-      match solve_lit x lit [] with
+      match solve_lit x lit accu with
 
-      | Eliminate { body; epsilons = [] } ->
+      | Eliminate body ->
         print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
         (* let aux conjunct =
          *   let new_conjunct = Term.subst_term [x,body] conjunct in
@@ -1356,25 +1354,18 @@ let solve_list conjuncts old_epsilons x : Term.t list * Term.t list * bool =
          *     print 5 "@[<2>Turning conjunct %a into %a@]@," Term.pp conjunct Term.pp new_conjunct
          * in
          * List.iter aux conjuncts; *)
-        Term.subst_terms [x,body] conjuncts, Term.subst_terms [x,body] old_epsilons, false
+        Term.subst_terms [x,body] conjuncts, Term.subst_terms [x,body] old_epsilons
 
-      | Eliminate subst  ->
-        let not_faithful() =
-          List.exists (fv x) treated
+      | NotGreat(Epsilon _ )
+        when List.exists (fv x) treated
           || List.exists (fv x) tail
-          || List.exists (fv x) old_epsilons
-        in
+          || List.exists (fv x) old_epsilons  ->
+        aux (lit::treated) accu tail
 
-        aux (lit::treated) ((Some not_faithful, subst)::accu) tail
-
-      | NonLinear substs ->
-        let rec aux2 accu = function
-          | [] -> accu
-          | subst::substs -> aux2 ((None, subst)::accu) substs
-        in
-        aux (lit::treated) (aux2 accu substs) tail
+      | NotGreat subst ->
+        aux (lit::treated) subst tail
   in
-  let result = aux [] [] conjuncts in
+  let result = aux [] (NonLinear []) conjuncts in
   print 5 "@]@]@,";
   result
 
@@ -1397,9 +1388,8 @@ let solve_all vars t =
   let rec aux conjuncts epsilons = function
     | [] -> conjuncts, epsilons
     | x::vars ->
-      match solve_list conjuncts epsilons x with
-      | _, _, true                 -> aux conjuncts epsilons vars
-      | conjuncts, epsilons, false -> aux conjuncts epsilons vars
+      let conjuncts, epsilons = solve_list conjuncts epsilons x in
+      aux conjuncts epsilons vars
   in
   let conjuncts, epsilons = aux conjuncts [] vars in
   print 3 "@[<2>IC finished@]@,";
