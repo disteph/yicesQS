@@ -212,7 +212,7 @@ module ExtTerm = struct
     | T t -> t
     | Bits  block -> Term.BV.bvarray block
     | Slice block -> SliceBlock.to_term block
-    | Concat l    -> Term.BV.bvconcat (List.map (fun (Block b) -> to_term b) l)
+    | Concat l    -> Term.BV.bvconcat (List.rev_map (fun (Block b) -> to_term b) l)
 
   type 'a yraw = ('a,Types.yterm) ext
   and yt = YExtTerm : 'a yraw -> yt
@@ -1174,7 +1174,7 @@ and solve_aux : type a b. Term.t -> pred -> (b,a Types.termstruct) ExtTerm.ext -
     | _ ->
       let open ExtTerm in
       let apply : type a. a base raw -> a base raw Variants.modified Monad.t = fun e_i ->
-        print 6 "@[<2>aux on e_i = %a@]@," ExtTerm.pp_raw e_i;
+        print 6 "@[<2>apply on e_i = %a@]@," ExtTerm.pp_raw e_i;
         let variants = lazy(
           if ExtTerm.fv x e_i
           then
