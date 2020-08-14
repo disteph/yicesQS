@@ -16,8 +16,6 @@ let ppl ~prompt pl fmt l = match l with
               (List.length l)
               (List.pp pl) l
 
-let pp_term fmt t = t |> Term.to_sexp |> pp_sexp fmt
-
 type subst = (Term.t * Term.t) list
 
 module HType = Hashtbl.Make(Type)
@@ -51,13 +49,13 @@ module Level = struct
                           %a@]"
       id
       (List.length rigid)
-      (List.pp ~sep:" " pp_term) rigid
+      (List.pp ~sep:" " Term.pp) rigid
       (List.length newvars)
-      (List.pp ~sep:" " pp_term) newvars
+      (List.pp ~sep:" " Term.pp) newvars
       pp_foralls foralls
   and pp_forall fmt {name; selector; sublevel} =
     Format.fprintf fmt "@[<v 2>%a opens sub-level@,%a@]"
-      pp_term name
+      Term.pp name
       pp sublevel
   and pp_foralls fmt = function
     | [] -> ()
@@ -91,8 +89,8 @@ module Game = struct
                         @[<2>Existentials:@ @[<v>%a@]@]@,\
                         @[<v 2>Levels:@,%a@]\
                         @]"
-      pp_term ground
-      (List.pp ~sep:"" pp_term) existentials
+      Term.pp ground
+      (List.pp ~sep:"" Term.pp) existentials
       Level.pp top_level
 
   (* The encoding of a formula into a game is done with a state monad,
@@ -185,7 +183,7 @@ module Game = struct
             let existential = Term.(name ||| SubGame.ground) in
             let universal   = Term.(selector === SubGame.ground) in
             fun state ->
-              print 5 "@[<2>Abstracting as %a formula @,%a@]@," pp_term name pp_term t;
+              print 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
               let newvars = List.append SubGame.top_level.newvars (name::selector::state.newvars) in
               let foralls = List.append SubGame.top_level.foralls (newforall::state.foralls) in
               let existentials = List.append SubGame.existentials (existential::state.existentials) in
@@ -197,7 +195,7 @@ module Game = struct
       | _ ->
         let+ x = map aux a in return(Term.build x)
     in
-    print 5 "@[<2>Traversing term@,%a@]@," pp_term body;
+    print 5 "@[<2>Traversing term@,%a@]@," Term.pp body;
     let id = !counter in
     let state = { newvars = intro; foralls = []; existentials = []; universals = []; } in
     let ground, { newvars; foralls; existentials; universals } = aux body state in
@@ -260,7 +258,7 @@ module SolverState = struct
 
   let learn (module S : T) lemmas =
     (* learnt := List.append lemma !S.learnt; *)
-    print 4 "@[<2>Learning %a@]@," (List.pp pp_term) lemmas;
+    print 4 "@[<2>Learning %a@]@," (List.pp Term.pp) lemmas;
     Context.assert_formulas S.context lemmas
 
   let record_epsilons ((module S : T) as state) epsilons =
@@ -300,7 +298,7 @@ module SModel = struct
   let pp fmt {support;model} =
     let aux fmt u =
       let v = Model.get_value_as_term model u in
-      Format.fprintf fmt "@[%a := %a@]" pp_term u pp_term v
+      Format.fprintf fmt "@[%a := %a@]" Term.pp u Term.pp v
     in
     match support with
     | [] -> Format.fprintf fmt "[]"
@@ -354,17 +352,17 @@ let build_table model oldvar newvar =
 
 let generalize_model model formula_orig oldvar newvar : (Term.t * Term.t list) LazyList.t =
   let formula, epsilons = IC.solve_all newvar formula_orig in
-  print 3 "@[<v2>Formula sent to IC is %a@]@," pp_term formula_orig;
-  print 3 "@[<v2>Formula returned by IC is %a@]@," pp_term formula;
+  print 3 "@[<v2>Formula sent to IC is %a@]@," Term.pp formula_orig;
+  print 3 "@[<v2>Formula returned by IC is %a@]@," Term.pp formula;
   (* let epsilons = [] in *)
   let tbl = build_table model oldvar newvar in
   let rec aux1 list : subst LazyList.t = match list with
     | []      -> LazyList.return []
     | (var, value, terms)::other_vars ->
       print 3 "@[<v2>Trying to eliminate variable %a, with value %a and matching variables %a@]@,"
-        pp_term var
-        pp_term value
-        (List.pp pp_term) terms;
+        Term.pp var
+        Term.pp value
+        (List.pp Term.pp) terms;
       let rest = aux1 other_vars in
       let rec aux2 = function
         | []    -> LazyList.map (fun subst -> (var,value)::subst) rest
@@ -459,7 +457,7 @@ and treat_sat state level model support =
       (* We first aggregate the reasons why our model worked *)
       (* Any model satisfying true_of_model would have been a good model *)
       let true_of_model = Term.andN reasons in
-      print 4 "@[<2>true of model is@ @[<v>%a@]@]@," pp_term true_of_model;
+      print 4 "@[<2>true of model is@ @[<v>%a@]@]@," Term.pp true_of_model;
       (* Now compute several projections of the reason on the rigid variables *)
       let seq =
         generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
@@ -479,7 +477,7 @@ and treat_sat state level model support =
       SolverState.record_epsilons state epsilons;
       print 3 "@[<v2>Level %i model works, with reason@,@[<v2>  %a@]@]@,"
         level.id
-        (List.pp pp_term)
+        (List.pp Term.pp)
         underapprox;
       Some underapprox
 
@@ -488,7 +486,7 @@ and treat_sat state level model support =
     | o :: opponents when not (Model.get_bool_value model Level.(o.name)) ->
       print 4 "@[Level %i does not need to be looked at as %a is false@]@,"
         o.sublevel.id
-        pp_term o.name;
+        Term.pp o.name;
       aux model (o.name::cumulated_support) (Term.not1 o.name::reasons) opponents
 
     (* Here we have a forall formula o that is true in the model;
@@ -496,7 +494,7 @@ and treat_sat state level model support =
     | o :: opponents ->
       print 4 "@[Level %i needs to be looked at as %a is true@]@,"
         o.sublevel.id
-        pp_term o.name;
+        Term.pp o.name;
 
       let open Level in
 
@@ -509,7 +507,7 @@ and treat_sat state level model support =
         (* if Model.get_bool_value model o.selector
          * then (\* The selector for this subformula is already true *\)
          *   (print 4 "@[Model already makes %a true, we stick to the same model@]@,"
-         *      pp_term o.selector;
+         *      Term.pp o.selector;
          *    post_process state o.sublevel model recurs_support, model)
          * else *)
         (* We extend the model by setting the selector to true *)
@@ -533,10 +531,10 @@ and treat_sat state level model support =
           print 4 "@[<v2>Back to level %i, we see from level %i answer Unsat with reason@,@[%a@]@]@,"
             level.id
             o.sublevel.id
-            pp_term reason;
+            Term.pp reason;
           (* We first eliminate the trigger from the reason... *)
           let reason = elim_trigger reason in
-          print 4 "@[Reason's projection is %a@]@," pp_term reason;
+          print 4 "@[Reason's projection is %a@]@," Term.pp reason;
           (* ...and check that our current model indeed satisfies it. *)
           (* check state level model o.sublevel.rigid reason; *)
           (* next moves on to the next opponent;
@@ -572,7 +570,7 @@ and treat_sat state level model support =
         print 4 "@[<v2>Back to level %i, we see from level %i answer Sat with reasons@,@[%a@]@]@,"
           level.id
           o.sublevel.id
-          (List.pp pp_term) reasons;
+          (List.pp Term.pp) reasons;
         assert(List.length reasons > 0);
         let aux reason =
           let reason = elim_trigger reason in
@@ -622,12 +620,12 @@ let treat filename =
           let ytype = ParseType.parse env.types typ |> Cont.get in
           let yvar = Term.new_uninterpreted ~name ytype in
           support := yvar :: !support;
-          (* print 2 "@[<2>  declared fun/cst is %a@]@," pp_term yvar; *)
+          (* print 2 "@[<2>  declared fun/cst is %a@]@," Term.pp yvar; *)
           Variables.permanently_add env.variables name yvar
 
         | "assert", [formula], Some env ->
           let formula = ParseTerm.parse env formula |> Cont.get in
-          (* print 2 "@[<2>Asserting formula@,%a@]@," pp_term formula; *)
+          (* print 2 "@[<2>Asserting formula@,%a@]@," Term.pp formula; *)
           (match env.model with
            | Some model -> Model.free model
            | None -> ());
@@ -739,7 +737,7 @@ match !args with
          let log = Action.(AssertFormula interpolant |> to_sexp log) in 
          Format.to_file newfile "@[<v>%a@]" SolverState.pp_log_raw (state,log)
      end;
-     Format.(fprintf stdout) "Interpolant:@,%a@," pp_term interpolant;
+     Format.(fprintf stdout) "Interpolant:@,%a@," Term.pp interpolant;
      Format.(fprintf stdout) "@]%!";
      raise exc
 
@@ -764,7 +762,7 @@ match !args with
          let log = Action.(AssertFormula under |> to_sexp log) in 
          Format.to_file newfile "@[<v>%a@]" SolverState.pp_log_raw (state,log)
      end;
-     Format.(fprintf stdout) "Under:@,%a@," pp_term under;
+     Format.(fprintf stdout) "Under:@,%a@," Term.pp under;
      Format.(fprintf stdout) "@]%!";
      raise exc
 
