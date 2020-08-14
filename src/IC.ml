@@ -52,6 +52,14 @@ end
 
 open MTerm(OptionMonad)
 
+let mins ~width = true :: List.init (width - 1) (fun _ -> false)
+                  |> List.rev
+                  |> Term.BV.bvconst_from_list
+let maxs ~width = false :: List.init (width - 1) (fun _ -> true)
+                  |> List.rev
+                  |> Term.BV.bvconst_from_list
+
+
 (****************************************************************)
 (* Conditional inverses as in the Niemetz et al. CAV'2018 paper *)
 (****************************************************************)
@@ -104,6 +112,18 @@ let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) li
   in
   aux [] l
 
+let reduce_sign_ext (ExtTerm.Block{ block; sign_ext; zero_ext } as b) =
+  let open ExtTerm in
+  if sign_ext = 0 then b
+  else
+    let width = width block in
+    let block = to_term block in
+    let min   = mins ~width in (* block and min should have same width *)
+    let term1 = Term.BV.(zero_extend (bvadd block min) sign_ext) in
+    let term2 = Term.BV.(zero_extend              min  sign_ext) in
+    let term  = Term.BV.bvsub term1 term2 in
+    Block{ block = Slice(BoolStruct.Leaf(Slice.build term)); sign_ext = 0; zero_ext }
+
 (* Solves concat(...,e_i,...) = t) in x
    It produces a list of pairs (e_i, t_i) such that
    * x is free in e_i
@@ -119,21 +139,28 @@ let getInverseConcat (x : Term.t) (t : Term.t) (concat : _ ExtTerm.block list) =
       print 6 "@[<2>getInverseConcat finds block of bits %a@]@," ExtTerm.pp b;
       aux (start_index + ExtTerm.width b) tail
 
-    | Block{ block = Slice bstruct; sign_ext; zero_ext } as b :: tail ->
+    | Block{ block = Slice bstruct as block; sign_ext; zero_ext } as b :: tail ->
       let width = ExtTerm.width b in
-      let next = aux (start_index + width) tail in
       print 6 "@[<2>getInverseConcat finds block of slice %a@]@," ExtTerm.pp b;
       if ExtTerm.fv x b
       then
         begin
           print 6 "@[<2>%a appears in it@]@," Term.pp x;
-          let t' = Term.BV.bvextract t start_index (start_index + width - 1) in
-          (ExtTerm.(ExtTerm(Slice bstruct)), t') :: next
+          if sign_ext = 0
+          then
+            (print 6 "@[<2>No sign extension@]@,";
+             let width = width - zero_ext in
+             let t' = Term.BV.bvextract t start_index (start_index + width - 1) in
+             (ExtTerm.(ExtTerm block), t') :: aux (start_index + width) tail )
+          else
+            (print 6 "@[<2>Sign extension of length %i@]@," sign_ext;
+             let b = reduce_sign_ext b in
+             aux start_index (b::tail))
         end
       else
         begin
           print 6 "@[<2>%a doesn't appear in it@]@," Term.pp x;
-          next
+          aux (start_index + width) tail
         end
   in
   aux 0 concat
@@ -148,13 +175,6 @@ type pred = [ `YICES_BV_GE_ATOM
             | `YICES_EQ_TERM ]
 
 exception NotImplemented
-
-let mins ~width = true :: List.init (width - 1) (fun _ -> false)
-                  |> List.rev
-                  |> Term.BV.bvconst_from_list
-let maxs ~width = false :: List.init (width - 1) (fun _ -> true)
-                  |> List.rev
-                  |> Term.BV.bvconst_from_list
 
 (* Tables 2, 3, 5, 6, 7, 8 *)
 
@@ -856,6 +876,15 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
 
     | _ ->
       let open ExtTerm in
+      let a : a termstruct = match a with
+        | Concat blocks ->
+          let aux block =
+            if ExtTerm.fv x block then reduce_sign_ext block
+            else block
+          in
+          Concat(List.map aux blocks)
+        | _ -> a
+      in
       let fresh_var e_i =
         let typ = ExtTerm.typeof e_i in
         Term.new_uninterpreted typ
