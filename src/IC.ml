@@ -860,13 +860,17 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
     match cons, a with (* We analyse the top-level predicate and its 1st argument e *)
 
     | _, Slice(Leaf{ extractee; indices = None }) ->
-      [ExtTerm(T extractee), t] |> recurs_call []
+      treat (ExtTerm(T extractee)) t
+
+    | _, (Block{ sign_ext } as block) when sign_ext > 0 ->
+      let Block{ block; sign_ext; zero_ext } = reduce_sign_ext block in
+      treat (ExtTerm(Block{ block; sign_ext; zero_ext })) t
 
     | _, Block{ block; sign_ext = 0; zero_ext = 0 } ->
-      [ExtTerm block, t] |> recurs_call []
+      treat (ExtTerm block) t
 
     | `YICES_EQ_TERM, Slice(Not a) ->
-      [ExtTerm(Slice a), Term.BV.bvnot t] |> recurs_call []
+      treat (ExtTerm(Slice a)) (Term.BV.bvnot t)
 
     | `YICES_EQ_TERM, Concat blocks when polarity ->
       getInverseConcat x t blocks |> recurs_call []
