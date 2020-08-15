@@ -363,6 +363,17 @@ let build_table model oldvar newvar =
   tbl
 
 let generalize_model model formula_orig oldvar newvar : (Term.t * Term.t list) LazyList.t =
+  let rec aux subst newvars = function
+    | [] -> Term.subst_term subst formula_orig, newvars
+    | var::tail ->
+      if Term.is_bool var
+      then
+        let b = Model.get_value_as_term model var in
+        aux ((var, b)::subst) newvars tail
+      else
+        aux subst (var::newvars) tail
+  in
+  let formula_orig, newvar = aux [] [] newvar in
   let formula, epsilons = IC.solve_all newvar formula_orig in
   print 3 "@[<v2>Formula sent to IC is %a@]@," Term.pp formula_orig;
   print 3 "@[<v2>Formula returned by IC is %a@]@," Term.pp formula;
