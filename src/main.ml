@@ -76,7 +76,8 @@ module Game = struct
     val ground    : Term.t (* Ground abstraction of the game, as a quantifier-free formula *)
     val existentials : Term.t list
     val universals   : Term.t list
-    val top_level : Level.t
+    val top_level    : Level.t
+    val selectors    : Term.t list
   end
 
   type t = (module T)
@@ -100,7 +101,8 @@ module Game = struct
     newvars : Term.t list;
     foralls : Level.forall list;
     existentials : Term.t list;
-    universals   : Term.t list
+    universals   : Term.t list;
+    selectors    : Term.t list
   }
 
   (* The state monad *)
@@ -181,14 +183,14 @@ module Game = struct
               Level.{ name; selector; selector_context; sublevel = SubGame.top_level }
             in
             let existential = Term.(name ||| SubGame.ground) in
-            let universal   = Term.(selector === SubGame.ground) in
+            let universal   = Term.(selector ==> SubGame.ground) in
             fun state ->
               print 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
               let newvars = List.append SubGame.top_level.newvars (name::selector::state.newvars) in
               let foralls = List.append SubGame.top_level.foralls (newforall::state.foralls) in
               let existentials = List.append SubGame.existentials (existential::state.existentials) in
               let universals   = List.append SubGame.universals   (universal::state.universals) in
-              name, { newvars; foralls; existentials; universals }
+              name, { newvars; foralls; existentials; universals; selectors = (Term.not1 selector)::state.selectors }
           end
       | Bindings { c = `YICES_LAMBDA_TERM } -> raise(CannotTreat t)
       | A0 _ -> return t
@@ -197,14 +199,15 @@ module Game = struct
     in
     print 5 "@[<2>Traversing term@,%a@]@," Term.pp body;
     let id = !counter in
-    let state = { newvars = intro; foralls = []; existentials = []; universals = []; } in
-    let ground, { newvars; foralls; existentials; universals } = aux body state in
+    let state = { newvars = intro; foralls = []; existentials = []; universals = []; selectors = [] } in
+    let ground, { newvars; foralls; existentials; universals; selectors } = aux body state in
     let foralls = List.rev foralls in
     (module struct
       let top_level = Level.{id; ground = Term.(ground &&& andN existentials); rigid; newvars; foralls;}
       let ground = ground
       let existentials = existentials
       let universals = universals
+      let selectors = selectors
     end)
 end
 
@@ -253,6 +256,15 @@ module SolverState = struct
     let () = Context.assert_formula context ground
     let () = Context.assert_formulas context existentials
     let () = Context.assert_formulas context universals
+
+    let rec selector_lemmas accu treated = function
+      | selector::tail ->
+        let accu = Term.(selector ||| andN(List.rev_append treated tail)) :: accu in
+        selector_lemmas accu (selector::treated) tail
+      | [] -> accu
+        
+    let () = Context.assert_formulas context (selector_lemmas [] [] selectors)
+ 
     (* let learnt = ref [] *)
   end : T)
 
