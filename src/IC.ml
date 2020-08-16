@@ -488,8 +488,6 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
             then (bvlt zero (bvnot(bvand [bvneg t ; s]))) &&& (bvlt zero t)
             else bvlt t zero_not
 
-          (* | No easy representation of x & s = t in yices *)
-
           | Astar(`YICES_OR_TERM, l) ->
             let aux sofar a =
               if equal a var then sofar
@@ -657,13 +655,240 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
         | A0(_,e)  when equal var e -> cond()
         | BV_Sum l when List.for_all filter l ->  cond()
 
+
         (* Tables 7 and 8 *)
-        | _ -> raise NotImplemented
+        | BV_Sum [coeff, Some monom] when equal var monom ->
+          let s = bvconst_from_list coeff in
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then bvsge (bvand[bvor [bvneg s; s]; maxs ~width]) t
+            else (s =/= zero) ||| bvsge t s
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvslt (bvand [ bvnot(bvneg t) ; (bvor [ bvneg s ; s ]) ]) t
+          else bvslt t (bvsub t (bvor [s; t; bvneg s])) 
+
+        | Product(true, prod) ->
+          let aux sofar ((p,exp) as a) =
+            if equal p var then
+              if Unsigned.UInt.to_int exp = 1 then sofar else raise NotImplemented
+            else
+              a::sofar
+          in
+          let s = build (Product (true, List.fold_left aux [] prod)) in
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then bvsge (bvand[bvor [bvneg s; s]; maxs ~width]) t
+            else (s =/= zero) ||| bvsge t s
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvslt (bvand [ bvnot(bvneg t) ; (bvor [ bvneg s ; s ]) ]) t
+          else bvslt t (bvsub t (bvor [s; t; bvneg s])) 
+
+        | A2(`YICES_BV_REM, x, s) when equal var x ->
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then (bvslt t s) ||| (bvsge zero s)
+            else bvslt zero_not (bvand [bvneg s ; t])
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvslt (bvnot t) (bvor [bvneg s; bvneg t])
+          else (bvsgt s zero ==> bvslt t (bvnot(bvneg s)))
+               &&& (bvsle s zero ==> (t =/= maxs width))
+               &&& ((t =/= zero) ||| (s =/= bvconst_one ~width))
+
+        | A2(`YICES_BV_REM, s, x) when equal var x ->
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then (bvsge s zero ==> bvsge s t)
+                 &&& ((bvslt s zero &&& bvsge t zero) ==> bvgt (bvsub s t) t)
+            else bvlt t (mins ~width) ||| bvsge t s
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvslt s t ||| bvslt zero t
+          else
+            let one = bvconst_one ~width in
+            (bvsge s zero ==> bvsgt s t)
+            &&& (bvslt s zero ==> bvsgt (bvlshr (bvsub s one) one) t)
+
+        | A2(`YICES_BV_DIV, x, s) when equal var x ->
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then bvsge (bvdiv zero_not s) t ||| bvsge (bvdiv (maxs ~width) s) t
+            else (bvdiv (bvmul s t) s === t) |||
+                 (bvsle t zero ==> bvslt (bvdiv (mins ~width) s) t)
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvsle t zero ==> bvslt (bvdiv (mins ~width) s) t
+          else bvsgt (bvdiv zero_not s) t ||| bvsgt (bvdiv (maxs ~width) s) t
+
+        | A2(`YICES_BV_DIV, s, x) when equal var x ->
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then (bvsge s zero ==> bvsge s t) &&&
+                 (bvslt s zero  ==> bvsge (bvlshr s (bvconst_one ~width)) t)
+            else bvsge t zero_not ||| bvsge t s
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvslt s t ||| bvsge t zero
+          else
+          if width = 1
+          then bvsgt s t
+          else (bvsge s zero ==> bvsgt s t) &&&
+               (bvslt s zero  ==> bvsgt (bvlshr s (bvconst_one ~width)) t)
+
+        | Astar(`YICES_OR_TERM, l) ->
+          let aux sofar a =
+            if equal a var then sofar
+            else a::sofar
+          in
+          let s = List.fold_left aux [] l in
+          let s = build (Astar(`YICES_OR_TERM, s)) in
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then bvand [s; t]
+            else bvsge t (bvor [s; mins ~width])
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvslt (bvor [bvnot(bvsub s t); s]) t
+          else bvslt t (bvor [s; maxs ~width])
+
+        | A2(`YICES_BV_LSHR, x, s) when equal var x ->
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then (s =/= zero) ==> bvsge (bvlshr zero_not s) t
+            else bvsge t (bvlshr t s)
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvslt (bvlshr (bvnot(bvneg t)) s) t
+          else bvslt t (bvlshr (bvshl (maxs ~width) s) s)
+
+        | A2(`YICES_BV_LSHR, s, x) when equal var x ->
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then (bvslt s zero ==> bvsge (bvlshr s (bvconst_one ~width)) t) &&&
+                 (bvsge s zero ==> bvsge s t)
+            else bvlt t (mins ~width) ||| bvsge t s
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvslt s t ||| bvslt zero t
+          else (bvslt s zero ==> bvsgt (bvlshr s (bvconst_one ~width)) t) &&&
+               (bvsge s zero ==> bvsgt s t)
+
+        | A2(`YICES_BV_ASHR, x, s) when equal var x ->
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then bvsge (bvlshr (maxs ~width) s) t
+            else bvsge t (bvnot (bvlshr (maxs ~width) s))
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvslt (bvashr (mins ~width) s) t
+          else bvslt t (bvlshr (maxs ~width) s)
+
+        | A2(`YICES_BV_ASHR, s, x) when equal var x ->
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then bvge t (bvnot t) ||| bvsge s t
+            else bvsge t zero ||| bvsge t s
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvslt s t ||| bvslt zero t
+          else bvslt t (bvand [s; maxs ~width]) &&& bvslt t (bvor [s; maxs ~width])
+
+        | A2(`YICES_BV_SHL, x, s) when equal var x ->
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then
+              let maxs = maxs ~width in
+              bvsge (bvand [bvshl maxs s; maxs]) t
+            else bvlt (bvlshr t (bvlshr t s)) (mins ~width)
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then bvslt (bvshl (bvlshr (mins ~width) s) s) t
+          else
+            let maxs = maxs ~width in
+            bvslt t (bvand [bvshl maxs s; maxs])
+
+        | A2(`YICES_BV_SHL, s, x) when Term.equal var x ->
+          if polarity
+          then (* Table 8 *)
+            if uneval_left (* uneval >= eval *)
+            then
+              let rec aux i accu =
+                if i = -1 then accu
+                else
+                  let atom = bvsge (bvshl s (bvconst_int ~width i)) t in
+                  aux (i-1) (atom :: accu)
+              in
+              orN (aux width [])
+            else bvlt (bvlshr t s) (mins ~width)
+          else (* Table 7 *)
+          if uneval_left (* uneval < eval *)
+          then
+            let mins = mins ~width in
+            bvlt (bvshl mins s) (bvadd t mins)
+          else
+            let rec aux i accu =
+              if i = -1 then accu
+              else
+                let atom = bvsgt (bvshl s (bvconst_int ~width i)) t in
+                aux (i-1) (atom :: accu)
+            in
+            orN (aux width [])
+
+        | A2(`YICES_BV_SMOD, x, s)
+        | A2(`YICES_BV_SDIV, x, s)
+        | A2(`YICES_BV_SREM, x, s)
+          -> raise NotImplemented
+
+        | A2(`YICES_BV_GE_ATOM, _, _)
+        | A2(`YICES_EQ_TERM, _, _)
+        | A2(`YICES_BV_SGE_ATOM, _, _)
+          -> assert false
+        | _ -> raise NotImplemented (* assert false *)
+
+
       end
     | ExtTerm.Slice(Not _)     (* Table 5 *)
     | ExtTerm.Slice(Leaf _) -> (* Should be added to Table 5 *)
       cond()
-    | ExtTerm.Slice _  -> raise NotImplemented
+
+    | ExtTerm.Slice(And l) ->
+      let s = conjuncts_disjuncts l |> bvor in
+      if polarity
+      then (* Table 8 *)
+        if uneval_left (* uneval >= eval *)
+        then (bvand [s; t] === t) ||| bvslt t (bvand [bvsub t s; s])
+        else bvsge s (bvand [t; mins ~width])
+      else (* Table 7 *)
+      if uneval_left (* uneval < eval *)
+      then bvslt (bvand [bvnot(bvneg t); s]) t
+      else bvslt t (bvand [s; maxs ~width])
+
+    | ExtTerm.Slice(Or l) ->
+      let s = conjuncts_disjuncts l |> bvor in
+      if polarity
+      then (* Table 8 *)
+        if uneval_left (* uneval >= eval *)
+        then bvand [s; t]
+        else bvsge t (bvor [s; mins ~width])
+      else (* Table 7 *)
+      if uneval_left (* uneval < eval *)
+      then bvslt (bvor [bvnot(bvsub s t); s]) t
+      else bvslt t (bvor [s; maxs ~width])
+
     | ExtTerm.Concat _ -> raise NotImplemented
     | ExtTerm.Block _ -> assert false (* We should have abandoned ship by now *)
     | ExtTerm.Bits _ -> assert false (* We should have abandoned ship by now *)
