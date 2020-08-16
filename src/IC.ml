@@ -753,7 +753,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
-            then bvand [s; t]
+            then bvsge s (bvand [s; t])
             else bvsge t (bvor [s; mins ~width])
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
@@ -882,7 +882,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
       if polarity
       then (* Table 8 *)
         if uneval_left (* uneval >= eval *)
-        then bvand [s; t]
+        then bvsge s (bvand [s; t])
         else bvsge t (bvor [s; mins ~width])
       else (* Table 7 *)
       if uneval_left (* uneval < eval *)
