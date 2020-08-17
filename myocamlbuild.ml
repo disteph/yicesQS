@@ -3,6 +3,7 @@ open Ocamlbuild_plugin
 let static_flags = S [A "-cclib"; A "-static"]
 
 let debug value env _build =
+  print_endline("debug is "^value);
   let arg = env "%/debug.mlh" in
   Echo(["[%%define debug_mode "^value^"]"], arg)
 
@@ -12,7 +13,6 @@ let () = dispatch begin function
           if getenv "MODE" = "debug" then "true" else "false"
         with _ -> "false"
       in
-      print_endline("debug is "^mode);
       rule "debug.mlh true"  ~prod:"%/debug.mlh" ~insert:(`top) (debug mode);
       dep ["ocaml"; "compile"]   ["src/debug.mlh"];
       dep ["ocaml"; "ocamldep"]  ["src/debug.mlh"];
