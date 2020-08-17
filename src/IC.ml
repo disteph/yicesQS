@@ -6,8 +6,6 @@ open Yices2_ext_bindings
 open Yices2_SMT2
 open Command_options
 
-let print i fs = Format.((if !verbosity >= i then fprintf else ifprintf) stdout) fs
-
 module LazyList = struct
 
   type 'a t = 'a node Lazy.t

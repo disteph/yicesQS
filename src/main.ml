@@ -1,13 +1,14 @@
+[%%import "debug.mlh"]
+
 open Containers
 open Sexplib
 open Type
 open Yices2_high
 open Yices2_ext_bindings
 open Yices2_SMT2
+
 open Command_options
 open IC
-
-let print i fs = Format.((if !verbosity >= i then fprintf else ifprintf) stdout) fs
 
 let ppl ~prompt pl fmt l = match l with
   | [] -> ()
@@ -215,7 +216,9 @@ module SolverState = struct
     val universals   : Term.t list
     val existentials : Term.t list
     val context           : Context.t (* Main context for the solver *)
+[%%if debug_mode]
     val epsilons_context  : Context.t (* context with only epsilon term constraints at level 0 *)
+[%%endif]
     (* val learnt : Term.t list ref *)
   end
 
@@ -248,13 +251,21 @@ module SolverState = struct
     
   let create config (module G : Game.T) = (module struct
     include G
+[%%if debug_mode]
     let epsilons_context = Context.malloc ~config ()
+[%%endif]
     let context          = Context.malloc ~config ()
     let () = Context.assert_formula context ground
     let () = Context.assert_formulas context existentials
     let () = Context.assert_formulas context universals
     (* let learnt = ref [] *)
   end : T)
+
+  [%%if debug_mode]
+  let epsilon_assert (module S : T) = Context.assert_formulas S.epsilons_context
+  [%%else]
+  let epsilon_assert _ _ = ()
+  [%%endif]
 
   let learn (module S : T) lemmas =
     (* learnt := List.append lemma !S.learnt; *)
@@ -264,7 +275,7 @@ module SolverState = struct
   let record_epsilons ((module S : T) as state) epsilons =
     print 3 "@[<v2>Recording epsilons @[<v2>  %a@]@]@,"
       (List.pp Term.pp) epsilons;
-    (* Context.assert_formulas S.epsilons_context epsilons; *)
+    epsilon_assert state epsilons;
     learn state epsilons
 
   let free (module G : T) =
@@ -381,21 +392,29 @@ let generalize_model model formula_orig oldvar newvar : (Term.t * Term.t list) L
   in
   LazyList.map aux substs
 
-(* let check state level model support reason =
- *   let (module S:SolverState.T) = state in
- *   print 3 "@[<v2>Checking that our model %a@,satisfies reason %a@]@,"
- *     SModel.pp { model; support }
- *     pp_term reason;
- *   Context.push S.epsilons_context;
- *   Context.assert_formula S.epsilons_context (Term.not1 reason);
- *   match Context.check_with_model S.epsilons_context model support with
- *   | `STATUS_SAT   ->
- *     print 3 "@[<v2>It does not satisfy it@]@,";
- *     raise (BadUnder(state, level, reason))
- *   | `STATUS_UNSAT ->
- *     print 3 "@[<v2>It does satisfy it@]@,";
- *     Context.pop S.epsilons_context
- *   | _ -> assert false *)
+[%%if debug_mode]
+
+let check state level model support reason =
+  let (module S:SolverState.T) = state in
+  print 3 "@[<v2>Checking that our model %a@,satisfies reason %a@]@,"
+    SModel.pp { model; support }
+    Term.pp reason;
+  Context.push S.epsilons_context;
+  Context.assert_formula S.epsilons_context (Term.not1 reason);
+  match Context.check_with_model S.epsilons_context model support with
+  | `STATUS_SAT   ->
+    print 3 "@[<v2>It does not satisfy it@]@,";
+    raise (BadUnder(state, level, reason))
+  | `STATUS_UNSAT ->
+    print 3 "@[<v2>It does satisfy it@]@,";
+    Context.pop S.epsilons_context
+  | _ -> assert false
+
+[%%else]
+
+let check state level model support reason = ()
+
+[%%endif]
 
 let rec solve state level model support : answer = try
     let (module S:SolverState.T) = state in
@@ -536,7 +555,7 @@ and treat_sat state level model support =
           let reason = elim_trigger reason in
           print 4 "@[Reason's projection is %a@]@," Term.pp reason;
           (* ...and check that our current model indeed satisfies it. *)
-          (* check state level model o.sublevel.rigid reason; *)
+          check state level model o.sublevel.rigid reason;
           (* next moves on to the next opponent;
              with a cumulated support and a model that may updated with what we've learnt. *)
           let next cumulated_support model =
@@ -574,7 +593,7 @@ and treat_sat state level model support =
         assert(List.length reasons > 0);
         let aux reason =
           let reason = elim_trigger reason in
-          (* check state level model o.sublevel.rigid reason; *)
+          check state level model o.sublevel.rigid reason;
           let lemma = Term.(o.name ==> not1 reason) in
           SolverState.learn state [lemma]
         in
