@@ -869,7 +869,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
       then (* Table 8 *)
         if uneval_left (* uneval >= eval *)
         then (bvand [s; t] === t) ||| bvslt t (bvand [bvsub t s; s])
-        else bvsge s (bvand [t; mins ~width])
+        else bvge s (bvand [t; mins ~width])
       else (* Table 7 *)
       if uneval_left (* uneval < eval *)
       then bvslt (bvand [bvnot(bvneg t); s]) t

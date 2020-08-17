@@ -425,7 +425,7 @@ let rec solve state level model support : answer = try
 
     print 4 "@[Trying to solve over-approximations@]@,";
     let status = match support with
-      | Empty -> Context.check context
+      | Empty -> print 0 "%!"; Context.check context
       | S _   -> Context.check_with_model context model (Support.list support)
     in
     match status with
