@@ -177,7 +177,7 @@ exception NotImplemented
 (* Tables 2, 3, 5, 6, 7, 8 *)
 
 let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.t ->
-  uneval_left:bool -> polarity:bool -> Term.t
+  uneval_left:bool -> polarity:bool -> Term.t * (Term.t option)
   = fun
     (var : Term.t)
     (cons : pred)
@@ -247,13 +247,13 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           match l with
           | A0(_,e) when equal var e ->  (* Not actually given in the paper, just obvious *)
             assert(not polarity);
-            Term.true0()
+            Term.true0(), if polarity then Some t else None
 
           | BV_Sum [coeff, Some monom] when equal var monom ->
             let s = bvconst_from_list coeff in
             if polarity
-            then (bvand [bvor [bvneg s; s]; t]) === t
-            else (s =/= zero) ||| (t =/= zero)
+            then (bvand [bvor [bvneg s; s]; t]) === t, None
+            else (s =/= zero) ||| (t =/= zero), Some(bvshl (maxs ~width) t)
 
           | Product(true, prod) ->
             let aux sofar ((p,exp) as a) =
@@ -264,37 +264,37 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
             in
             let s = build (Product (true, List.fold_left aux [] prod)) in
             if polarity
-            then (bvand [bvor [bvneg s; s]; t]) === t
-            else (s =/= zero) ||| (t =/= zero)
+            then (bvand [bvor [bvneg s; s]; t]) === t, None
+            else (s =/= zero) ||| (t =/= zero), Some(bvshl (maxs ~width) t)
 
           | A2(`YICES_BV_REM, x, s) when equal var x ->
             if polarity
-            then bvsge (bvnot (bvneg s)) t
-            else (s =/= bvconst_one ~width) ||| (t =/= zero)
+            then bvsge (bvnot (bvneg s)) t, Some t
+            else (s =/= bvconst_one ~width) ||| (t =/= zero), Some(bvneg(bvnot t))
 
           | A2(`YICES_BV_REM, s, x) when equal var x ->
             if polarity
-            then bvsge (bvsum [t; t; bvneg s]) t
-            else (s =/= zero) ||| (t =/= zero)
+            then bvsge (bvsum [t; t; bvneg s]) t, Some(bvsub s t)
+            else (s =/= zero) ||| (t =/= zero), Some t
 
           | A2(`YICES_BV_DIV, x, s) when equal var x ->
             if polarity
-            then (bvdiv (bvmul s t) s) === t
-            else (s =/= zero) ||| (t =/= zero_not)
+            then (bvdiv (bvmul s t) s) === t, Some(bvmul s t)
+            else (s =/= zero) ||| (t =/= zero_not), Some(bvlshr s t)
 
           | A2(`YICES_BV_DIV, s, x) when equal var x ->
             if polarity
-            then (bvdiv s (bvmul s t)) === t
+            then (bvdiv s (bvmul s t)) === t, None
             else
-            if width = 1 then bvand [s; t] === zero
-            else true0()
+            (if width = 1 then bvand [s; t] === zero
+             else true0()), Some(bvand [t; mins ~width]) 
 
           | A2(`YICES_BV_LSHR, x, s) when equal var x ->
             if polarity
-            then (bvlshr (bvshl t s) s === t)
+            then (bvlshr (bvshl t s) s === t), Some(bvshl t s)
             else
               let w = bvconst_int ~width width in
-              t =/= zero ||| (bvlt s w)
+              t =/= zero ||| (bvlt s w), Some(bvshl (mins ~width) t)
 
           | A2(`YICES_BV_LSHR, s, x) when equal var x ->
             if polarity
@@ -305,9 +305,9 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
                   let atom = (bvlshr s (bvconst_int ~width i) === t) in
                   aux (i-1) (atom :: accu)
               in
-              orN (aux width [])
+              orN (aux width []), None
             else
-              (s =/= zero) ||| (t =/= zero)
+              (s =/= zero) ||| (t =/= zero), Some(bvneg t)
 
           | A2(`YICES_BV_ASHR, x, s) when equal var x ->
             if polarity
@@ -315,8 +315,9 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
               let w = bvconst_int ~width width in
               ((bvlt s w) ==> (bvashr (bvshl t s) s === t))
               &&&
-              ((bvge s w) ==> (( t === zero_not) ||| (t === zero)))
-            else true0()
+              ((bvge s w) ==> (( t === zero_not) ||| (t === zero))),
+              None
+            else true0(), Some(bvnot t)
 
           | A2(`YICES_BV_ASHR, s, x) when equal var x ->
             if polarity
@@ -327,16 +328,18 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
                   let atom = (bvashr s (bvconst_int ~width i) === t) in
                   aux (i-1) (atom :: accu)
               in
-              orN (aux width [])
+              orN (aux width []), None
             else
               ((t =/= zero)     ||| (s =/= zero))
               &&&
-              ((t =/= zero_not) ||| (s =/= zero_not))
+              ((t =/= zero_not) ||| (s =/= zero_not)),
+              Some(bvlshr t (bvsub s t))
 
           | A2(`YICES_BV_SHL, x, s) when equal var x ->
             if polarity
-            then (bvshl (bvlshr t s) s) === t
-            else (t =/= zero) ||| (bvlt s (bvconst_int ~width width))
+            then (bvshl (bvlshr t s) s) === t, Some(bvlshr t s)
+            else (t =/= zero) ||| (bvlt s (bvconst_int ~width width)),
+                 Some(bvshl (mins ~width) t)
 
           | A2(`YICES_BV_SHL, s, x) when Term.equal var x ->
             if polarity
@@ -347,9 +350,9 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
                   let atom = (bvshl s (bvconst_int ~width i) === t) in
                   aux (i-1) (atom :: accu)
               in
-              orN (aux width [])
+              orN (aux width []), None
             else
-              (s =/= zero) ||| (t =/= zero)
+              (s =/= zero) ||| (t =/= zero), Some t
 
           | A2(`YICES_BV_SMOD, _, _)
           | A2(`YICES_BV_SDIV, _, _)
@@ -365,28 +368,28 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
         end
 
       | ExtTerm.Slice(Leaf{ extractee; indices }) -> (* Not in tables, but obvious *)
-        true0()
+        true0(), None
 
       | ExtTerm.Slice(And l) ->
         let s = conjuncts_disjuncts l in
         if polarity
-        then (bvand (t::s)) === t
+        then (bvand (t::s)) === t, Some t
         else
-          (bvand s =/= zero) ||| (t =/= zero)
+          (bvand s =/= zero) ||| (t =/= zero), Some(bvnot t)
 
       | ExtTerm.Slice(Or l) ->
         let s = conjuncts_disjuncts l in
         if polarity
-        then (bvor (t::s)) === t
+        then (bvor (t::s)) === t, Some t
         else
-          (bvor s =/= zero_not) ||| (t =/= zero_not)
+          (bvor s =/= zero_not) ||| (t =/= zero_not), Some(bvnot t)
 
       | ExtTerm.Slice(Not l) -> assert false (* Should not have led to epsilon-terms *)
 
       | ExtTerm.Concat l ->
         if polarity
         then assert false (* Should not have led to epsilon-terms *)
-        else true0()
+        else true0(), None
 
       | ExtTerm.Block _ -> assert false (* We should have abandoned ship by now *)
       | ExtTerm.Bits _ -> assert false (* We should have abandoned ship by now *)
@@ -408,8 +411,8 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           match l with
 
           (* Table 5 cases *)
-          | A0(_,e) when equal var e            -> cond()
-          | BV_Sum l when List.for_all filter l -> cond()
+          | A0(_,e) when equal var e            -> cond(), None
+          | BV_Sum l when List.for_all filter l -> cond(), None
 
           (* Tables 3 and 6 *)
           | BV_Sum [coeff, Some monom] when equal var monom ->
@@ -417,12 +420,12 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
             if polarity
             then (* Table 6 *)
               if uneval_left (* uneval >= eval *)
-              then bvge (bvor [bvneg s; s]) t
-              else true0()
+              then bvge (bvor [bvneg s; s]) t, None
+              else true0(), None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then t =/= zero
-            else bvlt t (bvor [bvneg s; s])
+            then t =/= zero, None
+            else bvlt t (bvor [bvneg s; s]), None
 
           | Product(true, prod) ->
             let aux sofar ((p,exp) as a) =
@@ -435,56 +438,56 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
             if polarity
             then (* Table 6 *)
               if uneval_left (* uneval >= eval *)
-              then bvge (bvor [bvneg s; s]) t
-              else true0()
+              then bvge (bvor [bvneg s; s]) t, None
+              else true0(), None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then t =/= zero
-            else bvlt t (bvor [bvneg s; s])
+            then t =/= zero, None
+            else bvlt t (bvor [bvneg s; s]), None
 
           | A2(`YICES_BV_REM, x, s) when equal var x ->
             if polarity
             then (* Table 6 *)
               if uneval_left (* uneval >= eval *)
-              then bvge (bvnot (bvneg s)) t
-              else true0()
+              then bvge (bvnot (bvneg s)) t, None
+              else true0(), None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then t =/= zero
-            else bvlt t (bvnot (bvneg s))
+            then t =/= zero, None
+            else bvlt t (bvnot (bvneg s)), None
 
           | A2(`YICES_BV_REM, s, x) when equal var x ->
             if polarity
             then (* Table 6 *)
               if uneval_left (* uneval >= eval *)
-              then bvge (bvand [bvsum [t; t; bvneg s] ; s]) t ||| (bvlt t s)
-              else true0()
+              then bvge (bvand [bvsum [t; t; bvneg s] ; s]) t ||| (bvlt t s), None
+              else true0(), None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then t =/= zero
-            else bvlt t s
+            then t =/= zero, None
+            else bvlt t s, None
 
           | A2(`YICES_BV_DIV, x, s) when equal var x ->
             if polarity
             then (* Table 6 *)
               if uneval_left (* uneval >= eval *)
-              then bvand [ bvdiv (bvmul s t) t ; s] === s
-              else true0()
+              then bvand [ bvdiv (bvmul s t) t ; s] === s, None
+              else true0(), None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then (bvlt zero s) &&& (bvlt zero t)
-            else bvgt (bvdiv zero_not s) t
+            then (bvlt zero s) &&& (bvlt zero t), None
+            else bvgt (bvdiv zero_not s) t, None
 
           | A2(`YICES_BV_DIV, s, x) when equal var x ->
             if polarity
             then (* Table 6 *)
               if uneval_left (* uneval >= eval *)
-              then true0()
-              else bvlt zero (bvor [ bvneg s ; t])
+              then true0(), None
+              else bvlt zero (bvor [ bvneg s ; t]), None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then (bvlt zero (bvnot(bvand [bvneg t ; s]))) &&& (bvlt zero t)
-            else bvlt t zero_not
+            then (bvlt zero (bvnot(bvand [bvneg t ; s]))) &&& (bvlt zero t), None
+            else bvlt t zero_not, None
 
           | Astar(`YICES_OR_TERM, l) ->
             let aux sofar a =
@@ -496,65 +499,65 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
             if polarity
             then (* Table 6 *)
               if uneval_left (* uneval >= eval *)
-              then true0()
-              else bvge t s
+              then true0(), None
+              else bvge t s, None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then bvlt s t
-            else bvlt t zero_not
+            then bvlt s t, None
+            else bvlt t zero_not, None
 
           | A2(`YICES_BV_LSHR, x, s) when equal var x ->
             if polarity
             then (* Table 6 *)
               if uneval_left (* uneval >= eval *)
-              then (bvlshr (bvshl t s) s === t)
-              else true0()
+              then (bvlshr (bvshl t s) s === t), None
+              else true0(), None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then t =/= zero
-            else bvlt t (bvlshr (bvnot s) s)
+            then t =/= zero, None
+            else bvlt t (bvlshr (bvnot s) s), None
 
           | A2(`YICES_BV_LSHR, s, x) when equal var x ->
             if polarity
             then (* Table 6 *)
               if uneval_left (* uneval >= eval *)
-              then bvge s t
-              else true0()
+              then bvge s t, None
+              else true0(), None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then t =/= zero
-            else bvlt t s
+            then t =/= zero, None
+            else bvlt t s, None
 
           | A2(`YICES_BV_ASHR, x, s) when equal var x ->
             if polarity
             then (* Table 6 *)
-              true0()
+              true0(), None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then t =/= zero
-            else bvlt t zero_not
+            then t =/= zero, None
+            else bvlt t zero_not, None
 
           | A2(`YICES_BV_ASHR, s, x) when equal var x ->
             if polarity
             then (* Table 6 *)
               if uneval_left (* uneval >= eval *)
-              then bvge s (bvnot s) ||| bvge s t
-              else bvlt s (mins ~width) ||| bvge t s
+              then bvge s (bvnot s) ||| bvge s t, None
+              else bvlt s (mins ~width) ||| bvge t s, None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then (bvlt s t ||| bvsge s zero) &&& (t =/= zero)
-            else (bvslt s (bvlshr s (bvnot t))) ||| (bvlt t s)
+            then (bvlt s t ||| bvsge s zero) &&& (t =/= zero), None
+            else (bvslt s (bvlshr s (bvnot t))) ||| (bvlt t s), None
 
           | A2(`YICES_BV_SHL, x, s) when equal var x ->
             if polarity
             then (* Table 6 *)
               if uneval_left (* uneval >= eval *)
-              then bvge (bvshl zero_not s) t
-              else true0()
+              then bvge (bvshl zero_not s) t, None
+              else true0(), None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then t =/= zero
-            else bvlt t (bvshl zero_not s)
+            then t =/= zero, None
+            else bvlt t (bvshl zero_not s), None
 
           | A2(`YICES_BV_SHL, s, x) when Term.equal var x ->
             if polarity
@@ -567,11 +570,11 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
                     let atom = bvge (bvshl s (bvconst_int ~width i)) t in
                     aux (i-1) (atom :: accu)
                 in
-                orN (aux width [])
-              else true0()
+                orN (aux width []), None
+              else true0(), None
             else (* Table 3 *)
             if uneval_left (* uneval < eval *)
-            then t =/= zero
+            then t =/= zero, None
             else
               let rec aux i accu =
                 if i = -1 then accu
@@ -579,7 +582,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
                   let atom = bvgt (bvshl s (bvconst_int ~width i)) t in
                   aux (i-1) (atom :: accu)
               in
-              orN (aux width [])
+              orN (aux width []), None
 
           | A2(`YICES_BV_SMOD, x, s)
           | A2(`YICES_BV_SDIV, x, s)
@@ -596,7 +599,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
 
       | ExtTerm.Slice(Not _)     (* Table 5 *)
       | ExtTerm.Slice(Leaf _) -> (* Should be added to Table 5 *)
-        cond()
+        cond(), None
 
       | ExtTerm.Slice(And l) ->
         if polarity
@@ -604,31 +607,31 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           if uneval_left (* uneval >= eval *)
           then
             let s = conjuncts_disjuncts l |> bvand in
-            bvge s t
-          else true0()
+            bvge s t, None
+          else true0(), None
         else (* Table 3 *)
         if uneval_left (* uneval < eval *)
-        then t =/= zero
+        then t =/= zero, None
         else
           let s = conjuncts_disjuncts l |> bvand in
-          bvlt t s
+          bvlt t s, None
 
       | ExtTerm.Slice(Or l) ->
         if polarity
         then (* Table 6 *)
           if uneval_left (* uneval >= eval *)
           then
-            true0()
+            true0(), None
           else 
             let s = conjuncts_disjuncts l |> bvor in
-            bvge t s
+            bvge t s, None
         else (* Table 3 *)
         if uneval_left (* uneval < eval *)
         then
           let s = conjuncts_disjuncts l |> bvor in
-          bvlt s t
+          bvlt s t, None
         else
-          t =/= zero_not
+          t =/= zero_not, None
 
       | ExtTerm.Concat l -> raise NotImplemented;
         
@@ -650,8 +653,8 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
         match l with
 
         (* Table 5 cases *)
-        | A0(_,e)  when equal var e -> cond()
-        | BV_Sum l when List.for_all filter l ->  cond()
+        | A0(_,e)  when equal var e -> cond(), None
+        | BV_Sum l when List.for_all filter l ->  cond(), None
 
 
         (* Tables 7 and 8 *)
@@ -660,12 +663,12 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
-            then bvsge (bvand[bvor [bvneg s; s]; maxs ~width]) t
-            else (s =/= zero) ||| bvsge t s
+            then bvsge (bvand[bvor [bvneg s; s]; maxs ~width]) t, None
+            else (s =/= zero) ||| bvsge t s, None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvslt (bvand [ bvnot(bvneg t) ; (bvor [ bvneg s ; s ]) ]) t
-          else bvslt t (bvsub t (bvor [s; t; bvneg s])) 
+          then bvslt (bvand [ bvnot(bvneg t) ; (bvor [ bvneg s ; s ]) ]) t, None
+          else bvslt t (bvsub t (bvor [s; t; bvneg s])), None
 
         | Product(true, prod) ->
           let aux sofar ((p,exp) as a) =
@@ -678,68 +681,68 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
-            then bvsge (bvand[bvor [bvneg s; s]; maxs ~width]) t
-            else (s =/= zero) ||| bvsge t s
+            then bvsge (bvand[bvor [bvneg s; s]; maxs ~width]) t, None
+            else (s =/= zero) ||| bvsge t s, None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvslt (bvand [ bvnot(bvneg t) ; (bvor [ bvneg s ; s ]) ]) t
-          else bvslt t (bvsub t (bvor [s; t; bvneg s])) 
+          then bvslt (bvand [ bvnot(bvneg t) ; (bvor [ bvneg s ; s ]) ]) t, None
+          else bvslt t (bvsub t (bvor [s; t; bvneg s])) , None
 
         | A2(`YICES_BV_REM, x, s) when equal var x ->
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
-            then (bvslt t s) ||| (bvsge zero s)
-            else bvslt zero_not (bvand [bvneg s ; t])
+            then (bvslt t s) ||| (bvsge zero s), None
+            else bvslt zero_not (bvand [bvneg s ; t]), None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvslt (bvnot t) (bvor [bvneg s; bvneg t])
+          then bvslt (bvnot t) (bvor [bvneg s; bvneg t]), None
           else (bvsgt s zero ==> bvslt t (bvnot(bvneg s)))
                &&& (bvsle s zero ==> (t =/= maxs width))
-               &&& ((t =/= zero) ||| (s =/= bvconst_one ~width))
+               &&& ((t =/= zero) ||| (s =/= bvconst_one ~width)), None
 
         | A2(`YICES_BV_REM, s, x) when equal var x ->
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
             then (bvsge s zero ==> bvsge s t)
-                 &&& ((bvslt s zero &&& bvsge t zero) ==> bvgt (bvsub s t) t)
-            else bvlt t (mins ~width) ||| bvsge t s
+                 &&& ((bvslt s zero &&& bvsge t zero) ==> bvgt (bvsub s t) t), None
+            else bvlt t (mins ~width) ||| bvsge t s, None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvslt s t ||| bvslt zero t
+          then bvslt s t ||| bvslt zero t, None
           else
             let one = bvconst_one ~width in
             (bvsge s zero ==> bvsgt s t)
-            &&& (bvslt s zero ==> bvsgt (bvlshr (bvsub s one) one) t)
+            &&& (bvslt s zero ==> bvsgt (bvlshr (bvsub s one) one) t), None
 
         | A2(`YICES_BV_DIV, x, s) when equal var x ->
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
-            then bvsge (bvdiv zero_not s) t ||| bvsge (bvdiv (maxs ~width) s) t
+            then bvsge (bvdiv zero_not s) t ||| bvsge (bvdiv (maxs ~width) s) t, None
             else (bvdiv (bvmul s t) s === t) |||
-                 (bvsle t zero ==> bvslt (bvdiv (mins ~width) s) t)
+                 (bvsle t zero ==> bvslt (bvdiv (mins ~width) s) t), None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvsle t zero ==> bvslt (bvdiv (mins ~width) s) t
-          else bvsgt (bvdiv zero_not s) t ||| bvsgt (bvdiv (maxs ~width) s) t
+          then bvsle t zero ==> bvslt (bvdiv (mins ~width) s) t, None
+          else bvsgt (bvdiv zero_not s) t ||| bvsgt (bvdiv (maxs ~width) s) t, None
 
         | A2(`YICES_BV_DIV, s, x) when equal var x ->
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
             then (bvsge s zero ==> bvsge s t) &&&
-                 (bvslt s zero  ==> bvsge (bvlshr s (bvconst_one ~width)) t)
-            else bvsge t zero_not ||| bvsge t s
+                 (bvslt s zero  ==> bvsge (bvlshr s (bvconst_one ~width)) t), None
+            else bvsge t zero_not ||| bvsge t s, None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvslt s t ||| bvsge t zero
+          then bvslt s t ||| bvsge t zero, None
           else
           if width = 1
-          then bvsgt s t
+          then bvsgt s t, None
           else (bvsge s zero ==> bvsgt s t) &&&
-               (bvslt s zero  ==> bvsgt (bvlshr s (bvconst_one ~width)) t)
+               (bvslt s zero  ==> bvsgt (bvlshr s (bvconst_one ~width)) t), None
 
         | Astar(`YICES_OR_TERM, l) ->
           let aux sofar a =
@@ -751,58 +754,58 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
-            then bvsge s (bvand [s; t])
-            else bvsge t (bvor [s; mins ~width])
+            then bvsge s (bvand [s; t]), None
+            else bvsge t (bvor [s; mins ~width]), None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvslt (bvor [bvnot(bvsub s t); s]) t
-          else bvslt t (bvor [s; maxs ~width])
+          then bvslt (bvor [bvnot(bvsub s t); s]) t, None
+          else bvslt t (bvor [s; maxs ~width]), None
 
         | A2(`YICES_BV_LSHR, x, s) when equal var x ->
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
-            then (s =/= zero) ==> bvsge (bvlshr zero_not s) t
-            else bvsge t (bvlshr t s)
+            then (s =/= zero) ==> bvsge (bvlshr zero_not s) t, None
+            else bvsge t (bvlshr t s), None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvslt (bvlshr (bvnot(bvneg t)) s) t
-          else bvslt t (bvlshr (bvshl (maxs ~width) s) s)
+          then bvslt (bvlshr (bvnot(bvneg t)) s) t, None
+          else bvslt t (bvlshr (bvshl (maxs ~width) s) s), None
 
         | A2(`YICES_BV_LSHR, s, x) when equal var x ->
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
             then (bvslt s zero ==> bvsge (bvlshr s (bvconst_one ~width)) t) &&&
-                 (bvsge s zero ==> bvsge s t)
-            else bvlt t (mins ~width) ||| bvsge t s
+                 (bvsge s zero ==> bvsge s t), None
+            else bvlt t (mins ~width) ||| bvsge t s, None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvslt s t ||| bvslt zero t
+          then bvslt s t ||| bvslt zero t, None
           else (bvslt s zero ==> bvsgt (bvlshr s (bvconst_one ~width)) t) &&&
-               (bvsge s zero ==> bvsgt s t)
+               (bvsge s zero ==> bvsgt s t), None
 
         | A2(`YICES_BV_ASHR, x, s) when equal var x ->
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
-            then bvsge (bvlshr (maxs ~width) s) t
-            else bvsge t (bvnot (bvlshr (maxs ~width) s))
+            then bvsge (bvlshr (maxs ~width) s) t, None
+            else bvsge t (bvnot (bvlshr (maxs ~width) s)), None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvslt (bvashr (mins ~width) s) t
-          else bvslt t (bvlshr (maxs ~width) s)
+          then bvslt (bvashr (mins ~width) s) t, None
+          else bvslt t (bvlshr (maxs ~width) s), None
 
         | A2(`YICES_BV_ASHR, s, x) when equal var x ->
           if polarity
           then (* Table 8 *)
             if uneval_left (* uneval >= eval *)
-            then bvge t (bvnot t) ||| bvsge s t
-            else bvsge t zero ||| bvsge t s
+            then bvge t (bvnot t) ||| bvsge s t, None
+            else bvsge t zero ||| bvsge t s, None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvslt s t ||| bvslt zero t
-          else bvslt t (bvand [s; maxs ~width]) &&& bvslt t (bvor [s; maxs ~width])
+          then bvslt s t ||| bvslt zero t, None
+          else bvslt t (bvand [s; maxs ~width]) &&& bvslt t (bvor [s; maxs ~width]), None
 
         | A2(`YICES_BV_SHL, x, s) when equal var x ->
           if polarity
@@ -810,14 +813,14 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
             if uneval_left (* uneval >= eval *)
             then
               let maxs = maxs ~width in
-              bvsge (bvand [bvshl maxs s; maxs]) t
-            else bvlt (bvlshr t (bvlshr t s)) (mins ~width)
+              bvsge (bvand [bvshl maxs s; maxs]) t, None
+            else bvlt (bvlshr t (bvlshr t s)) (mins ~width), None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
-          then bvslt (bvshl (bvlshr (mins ~width) s) s) t
+          then bvslt (bvshl (bvlshr (mins ~width) s) s) t, None
           else
             let maxs = maxs ~width in
-            bvslt t (bvand [bvshl maxs s; maxs])
+            bvslt t (bvand [bvshl maxs s; maxs]), None
 
         | A2(`YICES_BV_SHL, s, x) when Term.equal var x ->
           if polarity
@@ -830,13 +833,13 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
                   let atom = bvsge (bvshl s (bvconst_int ~width i)) t in
                   aux (i-1) (atom :: accu)
               in
-              orN (aux width [])
-            else bvlt (bvlshr t s) (mins ~width)
+              orN (aux width []), None
+            else bvlt (bvlshr t s) (mins ~width), None
           else (* Table 7 *)
           if uneval_left (* uneval < eval *)
           then
             let mins = mins ~width in
-            bvlt (bvshl mins s) (bvadd t mins)
+            bvlt (bvshl mins s) (bvadd t mins), None
           else
             let rec aux i accu =
               if i = -1 then accu
@@ -844,7 +847,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
                 let atom = bvsgt (bvshl s (bvconst_int ~width i)) t in
                 aux (i-1) (atom :: accu)
             in
-            orN (aux width [])
+            orN (aux width []), None
 
         | A2(`YICES_BV_SMOD, x, s)
         | A2(`YICES_BV_SDIV, x, s)
@@ -861,31 +864,31 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
       end
     | ExtTerm.Slice(Not _)     (* Table 5 *)
     | ExtTerm.Slice(Leaf _) -> (* Should be added to Table 5 *)
-      cond()
+      cond(), None
 
     | ExtTerm.Slice(And l) ->
       let s = conjuncts_disjuncts l |> bvor in
       if polarity
       then (* Table 8 *)
         if uneval_left (* uneval >= eval *)
-        then (bvand [s; t] === t) ||| bvslt t (bvand [bvsub t s; s])
-        else bvge s (bvand [t; mins ~width])
+        then (bvand [s; t] === t) ||| bvslt t (bvand [bvsub t s; s]), None
+        else bvge s (bvand [t; mins ~width]), None
       else (* Table 7 *)
       if uneval_left (* uneval < eval *)
-      then bvslt (bvand [bvnot(bvneg t); s]) t
-      else bvslt t (bvand [s; maxs ~width])
+      then bvslt (bvand [bvnot(bvneg t); s]) t, None
+      else bvslt t (bvand [s; maxs ~width]), None
 
     | ExtTerm.Slice(Or l) ->
       let s = conjuncts_disjuncts l |> bvor in
       if polarity
       then (* Table 8 *)
         if uneval_left (* uneval >= eval *)
-        then bvsge s (bvand [s; t])
-        else bvsge t (bvor [s; mins ~width])
+        then bvsge s (bvand [s; t]), None
+        else bvsge t (bvor [s; mins ~width]), None
       else (* Table 7 *)
       if uneval_left (* uneval < eval *)
-      then bvslt (bvor [bvnot(bvsub s t); s]) t
-      else bvslt t (bvor [s; maxs ~width])
+      then bvslt (bvor [bvnot(bvsub s t); s]) t, None
+      else bvslt t (bvor [s; maxs ~width]), None
 
     | ExtTerm.Concat _ -> raise NotImplemented
     | ExtTerm.Block _ -> assert false (* We should have abandoned ship by now *)
@@ -1020,9 +1023,11 @@ let rec solve : type a. Term.t -> pred -> uneval: a ExtTerm.closed -> eval:Term.
           | `YICES_EQ_TERM when polarity -> { body = eval; epsilons }
           | _ ->
             let Term a = Term.reveal e in
-            let phi = getIC x cons ~uneval:(TermStruct a) ~eval ~uneval_left ~polarity in
-            let typ = Term.type_of_term x in
-            let y   = Term.new_uninterpreted typ in
+            let phi, ci = getIC x cons ~uneval:(TermStruct a) ~eval ~uneval_left ~polarity in
+            let y   = match ci with
+              | Some y -> y
+              | None -> let typ = Term.type_of_term x in Term.new_uninterpreted typ
+            in
             let b   = make_lit cons ~uneval:y ~eval ~uneval_left ~polarity in
             { body = y; epsilons = Term.(phi ==> b)::epsilons }
         in
@@ -1145,10 +1150,14 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
     let treat dx' Monad.{ variable = x' ; standing4 = ExtTerm e_i } = try
         print 6 "@[<2>treat on var %a standing for head %a@]@," Term.pp x' ExtTerm.pp e_i;
         print 6 "@[<2>with dx' being %a@]@," ExtTerm.pp dx';
-        let phi = getIC x' cons ~uneval:dx' ~eval:t ~uneval_left ~polarity in
+        let phi, ci = getIC x' cons ~uneval:dx' ~eval:t ~uneval_left ~polarity in
         print 6 "@[<2>getIC gave us %a@]@," Term.pp phi;
-        let typ = Term.type_of_term x' in
-        let y   = Term.new_uninterpreted typ in
+        (* let typ = Term.type_of_term x' in
+         * let y   = Term.new_uninterpreted typ in *)
+        let y   = match ci with
+          | Some y -> y
+          | None -> x'
+        in
         let dy  = Term.subst_term [x',y] (ExtTerm.to_term dx') in
         let b   = make_lit cons ~uneval:dy ~eval:t ~uneval_left ~polarity in
         solve x `YICES_EQ_TERM ~uneval:e_i ~eval:y ~uneval_left:true ~polarity:true
@@ -1261,10 +1270,10 @@ let solve_list conjuncts old_epsilons x : Term.t list * Term.t list =
         when List.exists (Term.fv x) treated
           || List.exists (Term.fv x) tail
           || List.exists (Term.fv x) old_epsilons  ->
-        aux (lit::treated) accu tail
+        aux (lit::treated) accu tail (* Same accu as before looking at lit; i.e. we ignore the lit *)
 
       | NotGreat subst ->
-        aux (lit::treated) subst tail
+        aux (lit::treated) subst tail (* The accumulator has probably been updated my solve_lit *)
   in
   let result = aux [] (NonLinear []) conjuncts in
   print 5 "@]@]@,";
