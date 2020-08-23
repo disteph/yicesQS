@@ -386,13 +386,15 @@ let generalize_model model formula_orig oldvar newvar : (Term.t * Term.t list) W
         Term.pp var
         Term.pp value
         (List.pp Term.pp) terms;
-      let rec aux2 = function (* Transforming list of terms into a weighted (lazy) list *)
-        | []             -> WLL.return value
-        | [t]            -> lazy(`Cons((t,100), WLL.return value))
-        | t::(_::_ as l) -> lazy(`Cons((t,0), aux2 l))
+      let rec aux2 : Term.t list -> Term.t WLL.t = function (* Transforming list of terms into a weighted (lazy) list *)
+        | []   -> LazyList.empty
+        | t::l -> lazy(`Cons((t,0), aux2 l))
+        (* | []             -> WLL.return value *)
+        (* | [t]            -> lazy(`Cons((t,100), WLL.return value)) *)
+        (* | t::(_::_ as l) -> lazy(`Cons((t,0), aux2 l)) *)
       in
       let@ subst = aux1 other_vars in
-      let@ t     = aux2 terms in
+      let@ t     = lazy(`Cons((value,100), aux2 terms)) in
       WLL.return((var,t)::subst)
   in
   let@ subst = aux1 newvar in
