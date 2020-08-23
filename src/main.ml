@@ -361,36 +361,44 @@ let build_table model oldvar newvar =
   List.iter treat_old oldvar;
   tbl
 
-let generalize_model model formula_orig oldvar newvar : (Term.t * Term.t list) LazyList.t =
+module WLL = WLazyList(struct include Int let zero = 0 end)
+
+let generalize_model model formula_orig oldvar newvar : (Term.t * Term.t list) WLL.t =
+
+  (* First, we try to eliminate as many variables as we can by invertibility conditions *)
   let formula, epsilons = IC.solve_all newvar formula_orig in
   print 3 "@[<v2>Formula sent to IC is %a@]@," Term.pp formula_orig;
   print 3 "@[<v2>Formula returned by IC is %a@]@," Term.pp formula;
-  (* let epsilons = [] in *)
+
+  (* Then we build a table: for each value that the variables to eliminate take in the model,
+  what are the rigid variables that have that value? *)
   let tbl = build_table model oldvar newvar in
-  let rec aux1 list : subst LazyList.t = match list with
-    | []      -> LazyList.return []
-    | (var, value, terms)::other_vars ->
+  let open WLL in
+
+  (* aux1 takes the list of variables t eliminate.
+     The output is a (weighted) lazy list of substitutions. *)
+  let rec aux1 list : subst WLL.t = match list with
+    | []                              -> WLL.return []
+    | var::other_vars -> (* var is a variable to eliminate *)
+      let value = Model.get_value_as_term model var in (* its value in the model *)
+      let terms = THash.find tbl value in (* list of rigid variables that have that value *)
       print 3 "@[<v2>Trying to eliminate variable %a, with value %a and matching variables %a@]@,"
         Term.pp var
         Term.pp value
         (List.pp Term.pp) terms;
-      let rest = aux1 other_vars in
-      let rec aux2 = function
-        | []    -> LazyList.map (fun subst -> (var,value)::subst) rest
-        | t::tl -> LazyList.append (LazyList.map (fun subst -> (var,t)::subst) rest) (aux2 tl) 
+      let rec aux2 = function (* Transforming list of terms into a weighted (lazy) list *)
+        | []             -> WLL.return value
+        | [t]            -> lazy(`Cons((t,100), WLL.return value))
+        | t::(_::_ as l) -> lazy(`Cons((t,0), aux2 l))
       in
-      aux2 terms
+      let@ subst = aux1 other_vars in
+      let@ t     = aux2 terms in
+      WLL.return((var,t)::subst)
   in
-  let aux var =
-    let value = Model.get_value_as_term model var in
-    var, value, THash.find tbl value
-  in
-  let substs = newvar |> List.map aux |> aux1 in
-  let aux subst =
+  let@ subst = aux1 newvar in
+  WLL.return(
     Term.subst_term subst formula,
-    Term.subst_terms subst epsilons
-  in
-  LazyList.map aux substs
+    Term.subst_terms subst epsilons)
 
 [%%if debug_mode]
 
@@ -486,7 +494,7 @@ and treat_sat state level model support =
         else
           match Lazy.force l with
           | `Nil -> accu, epsilons
-          | `Cons((head, epsilons_local), tail) -> 
+          | `Cons(((head, epsilons_local), _), tail) -> 
             match epsilons_local, epsilons with
             | [], epsilons
             | epsilons, [] -> extract (head::accu) epsilons (n-1) tail
@@ -496,8 +504,7 @@ and treat_sat state level model support =
       SolverState.record_epsilons state epsilons;
       print 3 "@[<v2>Level %i model works, with reason@,@[<v2>  %a@]@]@,"
         level.id
-        (List.pp Term.pp)
-        underapprox;
+        (List.pp Term.pp) underapprox;
       Some underapprox
 
     (* Here we have a forall formula o that is false in the model;
