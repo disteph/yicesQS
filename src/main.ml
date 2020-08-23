@@ -504,8 +504,9 @@ and treat_sat state level model support =
       in
       let underapprox, epsilons = extract [] [] !underapprox seq in
       SolverState.record_epsilons state epsilons;
-      print 3 "@[<v2>Level %i model works, with reason@,@[<v2>  %a@]@]@,"
+      print 3 "@[<v2>Level %i model works, with %i reason(s)@,@[<v2>  %a@]@]@,"
         level.id
+        (List.length underapprox)
         (List.pp Term.pp) underapprox;
       Some underapprox
 
