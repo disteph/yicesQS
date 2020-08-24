@@ -43,6 +43,43 @@ module LazyList = struct
   
 end
 
+
+module WLazyList(M : sig
+    type t [@@deriving ord]
+    val zero : t
+    val (-) : t -> t -> t
+  end) = struct
+
+  type 'a t = ('a * M.t) LazyList.t
+
+  let return a = LazyList.return(a,M.zero)
+
+  let rec mix w1 l1 w2 l2 =
+    if M.(compare w1 w2) <= 0
+    then
+      w1, expand l1 M.(w2 - w1) l2
+    else
+      w2, expand l2 M.(w1 - w2) l1
+
+  and expand l diff l' =
+    lazy(match Lazy.force l with
+        | `Nil -> Lazy.force l'
+        | `Cons((h, w), t) ->
+          let w, next = mix diff l' w t in
+          `Cons((h, w), next))
+
+  let rec bind : type a b. a t -> (a -> b t) -> b t = fun a f ->
+    lazy(
+      match Lazy.force a with
+      | `Nil -> `Nil
+      | `Cons((h,w),t) ->
+        let _, r = mix M.zero (f h) w (bind t f) in
+        Lazy.force r)
+
+  let (let@) = bind
+end
+
+
 module OptionMonad = struct
   include Option
   let bind = ( >>= )
