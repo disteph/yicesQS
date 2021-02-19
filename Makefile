@@ -12,4 +12,3 @@ build:
 
 clean:
 	ocamlbuild -clean
-	git clean -dfXq
