@@ -1,0 +1,8 @@
+(executable
+ (name main)
+ (libraries sexplib containers zarith yices2_bindings)
+ (flags (:standard -cclib -lyices))
+ (preprocess (pps ppx_deriving.std ppx_optcomp))
+)
+
+(env (dev (flags (:standard -warn-error -A))))

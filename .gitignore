@@ -31,3 +31,4 @@ _opam/
 
 # MacOS
 .zprofile.log
+.DS_Store
