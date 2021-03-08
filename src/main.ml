@@ -16,6 +16,8 @@ let ppl ~prompt pl fmt l = match l with
               (List.length l)
               (List.pp pl) l
 
+let ppspace s fmt () = Format.fprintf fmt "%s" s
+
 type subst = (Term.t * Term.t) list
 
 module HType = Hashtbl.Make(Type)
@@ -49,9 +51,9 @@ module Level = struct
                           %a@]"
       id
       (List.length rigid)
-      (List.pp ~sep:" " Term.pp) rigid
+      (List.pp ~pp_sep:(ppspace " ") Term.pp) rigid
       (List.length newvars)
-      (List.pp ~sep:" " Term.pp) newvars
+      (List.pp ~pp_sep:(ppspace " ") Term.pp) newvars
       pp_foralls foralls
   and pp_forall fmt {name; selector; sublevel} =
     Format.fprintf fmt "@[<v 2>%a opens sub-level@,%a@]"
@@ -60,7 +62,7 @@ module Level = struct
   and pp_foralls fmt = function
     | [] -> ()
     | foralls -> Format.fprintf fmt "@,@[<v2>%i ∀-formula(e) / sub-level(s):@,%a@]"
-                   (List.length foralls) (List.pp ~sep:"" pp_forall) foralls
+                   (List.length foralls) (List.pp ~pp_sep:(ppspace "") pp_forall) foralls
 
   let rec free level =
     List.iter free_forall level.foralls
@@ -91,7 +93,7 @@ module Game = struct
                         @[<v 2>Levels:@,%a@]\
                         @]"
       Term.pp ground
-      (List.pp ~sep:"" Term.pp) existentials
+      (List.pp ~pp_sep:(ppspace "") Term.pp) existentials
       Level.pp top_level
 
   (* The encoding of a formula into a game is done with a state monad,
@@ -242,7 +244,7 @@ module SolverState = struct
     let log = List.fold_left intro log top_level.rigid in
     let sl     = List[Atom "set-logic";  Atom "QF_BV"] in
     let option = List[Atom "set-option"; Atom ":produce-unsat-model-interpolants"; Atom "true"] in
-    Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" pp_sexp) (option::sl::log)
+    Format.fprintf fmt "@[<v>%a@]" (List.pp ~pp_sep:(ppspace "") pp_sexp) (option::sl::log)
 
   let pp_log fmt ((module T:T) as state) =
     let open T in
@@ -314,7 +316,7 @@ module SModel = struct
     in
     match support with
     | [] -> Format.fprintf fmt "[]"
-    | support -> Format.fprintf fmt "@[<v>%a@]" (List.pp ~sep:"" aux) support
+    | support -> Format.fprintf fmt "@[<v>%a@]" (List.pp ~pp_sep:(ppspace "") aux) support
 
 end
 

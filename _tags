@@ -22,4 +22,5 @@ true: debug, optimize(3), unbox_closures
                 package(containers),\
                 package(ppx_optcomp),\
                 package(ppx_deriving.std),\
-                cclib(-lyices)
+                cclib(-lyices),\
+                thread
