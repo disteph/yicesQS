@@ -26,7 +26,7 @@ let copy_input filename subdir prefix =
       )
   )
 
-let print_log filename subdir suffix state log prefix =
+let print_log filename subdir ?(suffix="trace") state log prefix =
   let newfile = Filename.(filename |> remove_extension |> basename) in
   let newfile = newfile^"."^suffix^".smt2" in
   let newfile = Filename.(newfile |> concat subdir |> concat prefix) in
@@ -39,10 +39,10 @@ let print_log filename subdir suffix state log prefix =
       print_trace "input.smt2" "subdir" state
     writes the trace in file (!filedump)/subdir/input.trace.smt2 *)
 let print_trace filename subdir ((module S : SolverState.T) as state) prefix =
-  print_log filename subdir "trace" state (Context.to_sexp S.context) prefix
+  print_log filename subdir state (Context.to_sexp S.context) prefix
 
 (** Same as above but with an assertion instead of the whole trace *)
-let print_trace_with_assert filename subdir suffix ((module S : SolverState.T) as state) assertion prefix =
+let print_trace_with_assert filename subdir ?suffix ((module S : SolverState.T) as state) assertion prefix =
   let rec aux = function
     | [check_with_model;_] -> [check_with_model]
     | _::tail -> aux tail
@@ -50,7 +50,7 @@ let print_trace_with_assert filename subdir suffix ((module S : SolverState.T) a
   in
   let log = Context.to_sexp S.context |> aux in
   let log = Action.(AssertFormula assertion |> to_sexp log) in 
-  print_log filename subdir "trace" state log prefix
+  print_log filename subdir ?suffix state log prefix
 
 let copyNtrace filename subdir state prefix =
   copy_input  filename subdir prefix;
@@ -86,14 +86,14 @@ match !args with
    | BadInterpolant(state, level, interpolant) as exc ->
      let subdir = "bad_interpolant" in
      copyNtrace              filename subdir state |> if_filedump;
-     print_trace_with_assert filename subdir "interpolant_check" state interpolant |> if_filedump;
+     print_trace_with_assert filename subdir ~suffix:"interpolant_check" state interpolant |> if_filedump;
      Format.(fprintf stdout) "Interpolant at level %i:@,%a@]%!" level.id Term.pp interpolant;
      raise exc
 
    | BadUnder(state, level, under) as exc ->
      let subdir = "bad_under" in
      copyNtrace              filename subdir state |> if_filedump;
-     print_trace_with_assert filename subdir "under_check" state under |> if_filedump;
+     print_trace_with_assert filename subdir ~suffix:"under_check" state under |> if_filedump;
      Format.(fprintf stdout) "Under at level %i:@,%a@]%!" level.id Term.pp under;
      raise exc
 

@@ -1,5 +1,0 @@
-PKG ctypes ctypes.foreign sexplib containers ppx_deriving.std ppx_optcomp yices2_bindings
-S ../src
-S ../_build/src
-B ../src
-B ../_build/src

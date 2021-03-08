@@ -1,5 +1,4 @@
 open Containers
-open Yices2.High
 open Yices2.Ext_bindings
 
 module Level : sig
@@ -79,22 +78,20 @@ end
 module SolverState : sig
   module type T =
     sig
-      val ground : Term.t
-      val top_level : Level.t
-      val universals : Term.t list
-      val existentials : Term.t list
+      include Game.T
+      val logic : string
       val context : Context.t
       val epsilons_context : Context.t
     end
   type t = (module T)
   val pp : t Format.printer
   val pp_log_raw : (t * Sexplib.Sexp.t list) Format.printer
-  val pp_log     : t Format.printer
-  val create : Config.t -> (module Game.T) -> t
-  val epsilon_assert : t -> Term.t list -> unit
-  val learn : t -> Term.t List.t -> unit
+  (* val pp_log     : t Format.printer *)
+  val create     : logic:string -> Config.t -> (module Game.T) -> t
+  val epsilon_assert  : t -> Term.t list -> unit
+  val learn           : t -> Term.t List.t -> unit
   val record_epsilons : t -> Term.t List.t -> unit
-  val free : t -> unit
+  val free            : t -> unit
 end
 
 module Support : sig

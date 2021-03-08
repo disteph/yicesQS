@@ -98,7 +98,7 @@ let getInverseConcat (x : Term.t) (t : Term.t) (concat : _ ExtTerm.block list) =
   let rec aux start_index = function
     | [] -> [] (* x did not appear in a nice place *)
 
-    | Block{block = Bits _} as b :: tail ->
+    | Block{block = Bits _; _} as b :: tail ->
       print 6 "@[<2>getInverseConcat finds block of bits %a@]@," ExtTerm.pp b;
       aux (start_index + ExtTerm.width b) tail
 
@@ -135,7 +135,8 @@ let getInverseConcat (x : Term.t) (t : Term.t) (concat : _ ExtTerm.block list) =
 
 type pred = [ `YICES_BV_GE_ATOM
             | `YICES_BV_SGE_ATOM
-            | `YICES_EQ_TERM ]
+            | `YICES_EQ_TERM
+            | `YICES_ARITH_GE_ATOM ]
 
 exception NotImplemented
 
@@ -195,7 +196,8 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
     Types.pp_term_constructor (match cons with
         | `YICES_BV_GE_ATOM  -> `YICES_BV_GE_ATOM
         | `YICES_BV_SGE_ATOM -> `YICES_BV_SGE_ATOM
-        | `YICES_EQ_TERM -> `YICES_EQ_TERM)
+        | `YICES_EQ_TERM -> `YICES_EQ_TERM
+        | `YICES_ARITH_GE_ATOM -> `YICES_ARITH_GE_ATOM)
     ExtTerm.pp uneval
     (if uneval_left then "left" else "right")
     Term.pp eval
@@ -204,6 +206,8 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
   let t = eval in
   match cons with
 
+  | `YICES_ARITH_GE_ATOM -> raise NotImplemented
+  
   | `YICES_EQ_TERM -> (* Table 2 *)
     begin
       match uneval with
@@ -332,7 +336,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           | _ -> raise NotImplemented
         end
 
-      | ExtTerm.Slice(Leaf{ extractee; indices }) -> (* Not in tables, but obvious *)
+      | ExtTerm.Slice(Leaf{ extractee = _; indices = _ }) -> (* Not in tables, but obvious *)
         true0(), None
 
       | ExtTerm.Slice(And l) ->
@@ -349,9 +353,9 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
         else
           (bvor s =/= zero_not) ||| (t =/= zero_not), Some(bvnot t)
 
-      | ExtTerm.Slice(Not l) -> assert false (* Should not have led to epsilon-terms *)
+      | ExtTerm.Slice(Not _l) -> assert false (* Should not have led to epsilon-terms *)
 
-      | ExtTerm.Concat l ->
+      | ExtTerm.Concat _l ->
         if polarity
         then assert false (* Should not have led to epsilon-terms *)
         else true0(), None
@@ -549,9 +553,9 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
               in
               orN (aux width []), None
 
-          | A2(`YICES_BV_SMOD, x, s)
-          | A2(`YICES_BV_SDIV, x, s)
-          | A2(`YICES_BV_SREM, x, s)
+          | A2(`YICES_BV_SMOD, _x, _s)
+          | A2(`YICES_BV_SDIV, _x, _s)
+          | A2(`YICES_BV_SREM, _x, _s)
             -> raise NotImplemented
 
           | A2(`YICES_BV_GE_ATOM, _, _)
@@ -598,7 +602,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
         else
           t =/= zero_not, None
 
-      | ExtTerm.Concat l -> raise NotImplemented;
+      | ExtTerm.Concat _l -> raise NotImplemented;
         
       | ExtTerm.Block _ -> assert false (* We should have abandoned ship by now *)
       | ExtTerm.Bits _ -> assert false (* We should have abandoned ship by now *)
@@ -609,8 +613,8 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
       if polarity
       then Term.true0() (* Column 6 *)
       else if uneval_left
-      then t =/= mins width (* Column 4 *)
-      else t =/= maxs width (* Column 5 *)
+      then t =/= mins ~width (* Column 4 *)
+      else t =/= maxs ~width (* Column 5 *)
     in
     match uneval with
     | ExtTerm.TermStruct l ->
@@ -663,7 +667,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           if uneval_left (* uneval < eval *)
           then bvslt (bvnot t) (bvor [bvneg s; bvneg t]), None
           else (bvsgt s zero ==> bvslt t (bvnot(bvneg s)))
-               &&& (bvsle s zero ==> (t =/= maxs width))
+               &&& (bvsle s zero ==> (t =/= maxs ~width))
                &&& ((t =/= zero) ||| (s =/= bvconst_one ~width)), None
 
         | A2(`YICES_BV_REM, s, x) when equal var x ->
@@ -814,9 +818,9 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
             in
             orN (aux width []), None
 
-        | A2(`YICES_BV_SMOD, x, s)
-        | A2(`YICES_BV_SDIV, x, s)
-        | A2(`YICES_BV_SREM, x, s)
+        | A2(`YICES_BV_SMOD, _x, _s)
+        | A2(`YICES_BV_SDIV, _x, _s)
+        | A2(`YICES_BV_SREM, _x, _s)
           -> raise NotImplemented
 
         | A2(`YICES_BV_GE_ATOM, _, _)
@@ -912,7 +916,7 @@ type subst = {
   epsilon    : bool         (* Whether this substitution involves any epsilon-term / fresh var *)
 }
 
-let pp_subst x fmt { body; conditions } =
+let pp_subst x fmt { body; conditions; epsilon = _ } =
   Format.fprintf fmt "{%a <- %a} with %a" Term.pp x Term.pp body (List.pp Term.pp) conditions
 
 module Substs = struct
@@ -1054,7 +1058,7 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
     | _, Slice(Leaf{ extractee; indices = None }) ->
       treat (ExtTerm(T extractee)) t
 
-    | _, (Block{ sign_ext } as block) when sign_ext > 0 ->
+    | _, (Block{ sign_ext; _ } as block) when sign_ext > 0 ->
       let Block{ block; sign_ext; zero_ext } = reduce_sign_ext block in
       treat (ExtTerm(Block{ block; sign_ext; zero_ext })) t
 
@@ -1145,7 +1149,7 @@ let solve_atom
     Term.pp e
     Term.pp t;
   match cons with
-  | `YICES_EQ_TERM | `YICES_BV_GE_ATOM | `YICES_BV_SGE_ATOM as cons ->
+  | `YICES_EQ_TERM | `YICES_ARITH_GE_ATOM | `YICES_BV_GE_ATOM | `YICES_BV_SGE_ATOM as cons ->
     if Term.fv x t
     then if Term.fv x e
       then match cons with
@@ -1169,7 +1173,9 @@ let solve_atom
     else
       (print 6 "@[<2>Present on lhs only@]@,";
        solve x cons ~uneval:(ExtTerm.T e) ~eval:t ~uneval_left:true ~polarity [] false)
-  | _ -> assert false
+  | _ ->
+     Format.(fprintf stdout) "wrong predicate in solve_atom: %a" Term.pp (Term.build atom);
+     assert false
 
 
 let solve_lit x lit substs =
@@ -1205,7 +1211,7 @@ let solve_list conjuncts old_conditions x value : (Term.t list * Term.t list) CL
   let rec aux treated accu = function
     | [] ->
       begin match accu with
-        | Epsilon {body; conditions} ->
+        | Epsilon {body; conditions; epsilon = _} ->
           CLL.return (
             Term.subst_terms [x,body] conjuncts,
             conditions @ Term.subst_terms [x,body] old_conditions)
@@ -1249,7 +1255,7 @@ let solve_list conjuncts old_conditions x : Term.t list * Term.t list =
   let rec aux treated accu = function
     | [] ->
       begin match accu with
-        | Epsilon {body; conditions} ->
+        | Epsilon {body; conditions; epsilon = _ } ->
           print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
           (* let aux conjunct =
            *   let new_conjunct = Term.subst_term [x,body] conjunct in
