@@ -505,10 +505,10 @@ and treat_sat state level model support =
       print 4 "@[<2>true of model is@ @[<v>%a@]@]@," Term.pp true_of_model;
       (* Now compute several projections of the reason on the rigid variables *)
       let seq =
-        try
-          Model.generalize_model model true_of_model Level.(level.newvars) `YICES_GEN_BY_PROJ
-          |> Term.andN |> fun x -> CLL.return (x,[])
-        with ExceptionsErrorHandling.YicesException _ ->
+        (* try
+         *   Model.generalize_model model true_of_model Level.(level.newvars) `YICES_GEN_BY_PROJ
+         *   |> Term.andN |> fun x -> CLL.return (x,[])
+         * with ExceptionsErrorHandling.YicesException _ -> *)
           generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
       in
       let rec extract
