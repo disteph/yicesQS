@@ -1,9 +1,6 @@
 open Containers
-open Sexplib
-open Type
 open Yices2.High
 open Yices2.Ext_bindings
-open Yices2.SMT2
 open Command_options
 
 module OptionMonad = struct
@@ -59,7 +56,6 @@ let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) li
     | (bl,Some e_i) as monomial::to_treat when Term.fv x e_i ->
       let next = aux (monomial::treated) to_treat in
       let t'   = rebuild treated to_treat in
-      let open ExtTerm in
       begin match bl with
         | true::tail when List.for_all (fun b -> b) tail ->  (* coeff is -1 *)
           (ExtTerm.(ExtTerm(T e_i)), Term.BV.bvneg t') :: next
@@ -1142,7 +1138,6 @@ let solve_atom
     (atom : [`a2] Types.composite Types.termstruct)
     (polarity : bool)
   =
-  let open ExtTerm in
   let Types.A2(cons,e,t) = atom in
   print 6 "@[<2>solve_atom %a with lhs = %a and rhs = %a@]@,"
     Term.pp x
@@ -1221,7 +1216,6 @@ let solve_list conjuncts old_conditions x value : (Term.t list * Term.t list) CL
       end
       
     | lit::tail ->
-      let open CLL in
 
       match solve_lit x lit accu with
 
@@ -1314,8 +1308,6 @@ let get_conjuncts t =
 
 
 let solve_all vars t =
-  let open Term in
-  let open Types in
   let conjuncts = get_conjuncts t in
   print 3 "@[<2>IC analyses %a@]@," Term.pp t;
   let rec aux conjuncts conditions = function
