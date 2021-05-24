@@ -98,7 +98,7 @@ let getInverseConcat (x : Term.t) (t : Term.t) (concat : _ ExtTerm.block list) =
       print 6 "@[<2>getInverseConcat finds block of bits %a@]@," ExtTerm.pp b;
       aux (start_index + ExtTerm.width b) tail
 
-    | Block{ block = Slice bstruct as block; sign_ext; zero_ext } as b :: tail ->
+    | Block{ block = Slice _ as block; sign_ext; zero_ext } as b :: tail ->
       let width = ExtTerm.width b in
       print 6 "@[<2>getInverseConcat finds block of slice %a@]@," ExtTerm.pp b;
       if ExtTerm.fv x b
@@ -493,7 +493,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
             then t =/= zero, None
             else bvlt t s, None
 
-          | A2(`YICES_BV_ASHR, x, s) when equal var x ->
+          | A2(`YICES_BV_ASHR, x, _s) when equal var x ->
             if polarity
             then (* Table 6 *)
               true0(), None

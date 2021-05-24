@@ -197,7 +197,7 @@ module Game = struct
       | _ ->
         let+ x = map aux a in return(Term.build x)
     in
-    print 5 "@[<2>Traversing term@,%a@]@," Term.pp body;
+    print 5 "@[<v2>Traversing term@,%a@]@," Term.pp body;
     let id = !counter in
     let state = { newvars = intro; foralls = []; existentials = []; universals = []; } in
     let ground, { newvars; foralls; existentials; universals } = aux body state in
@@ -450,9 +450,11 @@ let rec solve state level model support : answer = try
       SModel.pp { model; support = Support.list support };
 
     print 4 "@[Trying to solve over-approximations@]@,";
-    let status = match support with
+    let status =
+      match support with
       | Empty -> print 0 "."; Context.check context
-      | S _   -> print 0 "."; Context.check_with_model context model (Support.list support)
+      | S _   ->
+                 print 0 "."; Context.check_with_model context model (Support.list support)
     in
     match status with
 
@@ -505,10 +507,12 @@ and treat_sat state level model support =
       print 4 "@[<2>true of model is@ @[<v>%a@]@]@," Term.pp true_of_model;
       (* Now compute several projections of the reason on the rigid variables *)
       let seq =
-        (* try
-         *   Model.generalize_model model true_of_model Level.(level.newvars) `YICES_GEN_BY_PROJ
-         *   |> Term.andN |> fun x -> CLL.return (x,[])
-         * with ExceptionsErrorHandling.YicesException _ -> *)
+         print 1 "@,Sent for generalization:@, %a@," Term.pp true_of_model;
+         (* print 0 "@,%a" (List.pp Term.pp) Level.(level.newvars); *)
+        try
+          Model.generalize_model model true_of_model Level.(level.newvars) `YICES_GEN_BY_PROJ
+          |> Term.andN |> fun x -> CLL.return (x,[])
+        with ExceptionsErrorHandling.YicesException _ ->
           generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
       in
       let rec extract
@@ -527,6 +531,7 @@ and treat_sat state level model support =
             | _::_, _::_   -> extract accu epsilons (n-1) tail
       in
       let underapprox, epsilons = extract [] [] !underapprox seq in
+      print 1 "@,After generalization@, %a@," (List.pp Term.pp) underapprox;
       SolverState.record_epsilons state epsilons;
       print 3 "@[<v2>Level %i model works, with %i reason(s)@,@[<v2>  %a@]@]@,"
         level.id
