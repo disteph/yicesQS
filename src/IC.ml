@@ -1,9 +1,6 @@
 open Containers
-open Sexplib
-open Type
 open Yices2.High
 open Yices2.Ext_bindings
-open Yices2.SMT2
 open Command_options
 
 module OptionMonad = struct
@@ -59,7 +56,6 @@ let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) li
     | (bl,Some e_i) as monomial::to_treat when Term.fv x e_i ->
       let next = aux (monomial::treated) to_treat in
       let t'   = rebuild treated to_treat in
-      let open ExtTerm in
       begin match bl with
         | true::tail when List.for_all (fun b -> b) tail ->  (* coeff is -1 *)
           (ExtTerm.(ExtTerm(T e_i)), Term.BV.bvneg t') :: next
@@ -98,11 +94,11 @@ let getInverseConcat (x : Term.t) (t : Term.t) (concat : _ ExtTerm.block list) =
   let rec aux start_index = function
     | [] -> [] (* x did not appear in a nice place *)
 
-    | Block{block = Bits _} as b :: tail ->
+    | Block{block = Bits _; _} as b :: tail ->
       print 6 "@[<2>getInverseConcat finds block of bits %a@]@," ExtTerm.pp b;
       aux (start_index + ExtTerm.width b) tail
 
-    | Block{ block = Slice bstruct as block; sign_ext; zero_ext } as b :: tail ->
+    | Block{ block = Slice _ as block; sign_ext; zero_ext } as b :: tail ->
       let width = ExtTerm.width b in
       print 6 "@[<2>getInverseConcat finds block of slice %a@]@," ExtTerm.pp b;
       if ExtTerm.fv x b
@@ -332,7 +328,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           | _ -> raise NotImplemented
         end
 
-      | ExtTerm.Slice(Leaf{ extractee; indices }) -> (* Not in tables, but obvious *)
+      | ExtTerm.Slice(Leaf{ extractee = _; indices = _ }) -> (* Not in tables, but obvious *)
         true0(), None
 
       | ExtTerm.Slice(And l) ->
@@ -349,9 +345,9 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
         else
           (bvor s =/= zero_not) ||| (t =/= zero_not), Some(bvnot t)
 
-      | ExtTerm.Slice(Not l) -> assert false (* Should not have led to epsilon-terms *)
+      | ExtTerm.Slice(Not _l) -> assert false (* Should not have led to epsilon-terms *)
 
-      | ExtTerm.Concat l ->
+      | ExtTerm.Concat _l ->
         if polarity
         then assert false (* Should not have led to epsilon-terms *)
         else true0(), None
@@ -493,7 +489,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
             then t =/= zero, None
             else bvlt t s, None
 
-          | A2(`YICES_BV_ASHR, x, s) when equal var x ->
+          | A2(`YICES_BV_ASHR, x, _s) when equal var x ->
             if polarity
             then (* Table 6 *)
               true0(), None
@@ -549,9 +545,9 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
               in
               orN (aux width []), None
 
-          | A2(`YICES_BV_SMOD, x, s)
-          | A2(`YICES_BV_SDIV, x, s)
-          | A2(`YICES_BV_SREM, x, s)
+          | A2(`YICES_BV_SMOD, _x, _s)
+          | A2(`YICES_BV_SDIV, _x, _s)
+          | A2(`YICES_BV_SREM, _x, _s)
             -> raise NotImplemented
 
           | A2(`YICES_BV_GE_ATOM, _, _)
@@ -598,7 +594,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
         else
           t =/= zero_not, None
 
-      | ExtTerm.Concat l -> raise NotImplemented;
+      | ExtTerm.Concat _l -> raise NotImplemented;
         
       | ExtTerm.Block _ -> assert false (* We should have abandoned ship by now *)
       | ExtTerm.Bits _ -> assert false (* We should have abandoned ship by now *)
@@ -609,8 +605,8 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
       if polarity
       then Term.true0() (* Column 6 *)
       else if uneval_left
-      then t =/= mins width (* Column 4 *)
-      else t =/= maxs width (* Column 5 *)
+      then t =/= mins ~width (* Column 4 *)
+      else t =/= maxs ~width (* Column 5 *)
     in
     match uneval with
     | ExtTerm.TermStruct l ->
@@ -663,7 +659,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           if uneval_left (* uneval < eval *)
           then bvslt (bvnot t) (bvor [bvneg s; bvneg t]), None
           else (bvsgt s zero ==> bvslt t (bvnot(bvneg s)))
-               &&& (bvsle s zero ==> (t =/= maxs width))
+               &&& (bvsle s zero ==> (t =/= maxs ~width))
                &&& ((t =/= zero) ||| (s =/= bvconst_one ~width)), None
 
         | A2(`YICES_BV_REM, s, x) when equal var x ->
@@ -814,9 +810,9 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
             in
             orN (aux width []), None
 
-        | A2(`YICES_BV_SMOD, x, s)
-        | A2(`YICES_BV_SDIV, x, s)
-        | A2(`YICES_BV_SREM, x, s)
+        | A2(`YICES_BV_SMOD, _x, _s)
+        | A2(`YICES_BV_SDIV, _x, _s)
+        | A2(`YICES_BV_SREM, _x, _s)
           -> raise NotImplemented
 
         | A2(`YICES_BV_GE_ATOM, _, _)
@@ -912,7 +908,7 @@ type subst = {
   epsilon    : bool         (* Whether this substitution involves any epsilon-term / fresh var *)
 }
 
-let pp_subst x fmt { body; conditions } =
+let pp_subst x fmt { body; conditions; _ } =
   Format.fprintf fmt "{%a <- %a} with %a" Term.pp x Term.pp body (List.pp Term.pp) conditions
 
 module Substs = struct
@@ -1039,9 +1035,10 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
         else treat e_i t' ||> recurs_call accu tail
         (* Linear case treated immediately doesn't go further if it comes back with Eliminate *)
     in
+    (* The following function tests if a bvsum l is a monomial whose coeff is 1 or -1 *)
     let test_poly = function
       | _::_::_ | [_, None] | [] -> true
-      | [coeff, Some var] ->
+      | [coeff, Some _var] ->
         match coeff with
           | true::tail when List.for_all (fun b -> b) tail -> true  (* coeff is -1 *)
           | true::tail when List.for_all (fun b -> not b) tail -> true (* coeff is 1 *)
@@ -1054,7 +1051,7 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
     | _, Slice(Leaf{ extractee; indices = None }) ->
       treat (ExtTerm(T extractee)) t
 
-    | _, (Block{ sign_ext } as block) when sign_ext > 0 ->
+    | _, (Block{ sign_ext; _ } as block) when sign_ext > 0 ->
       let Block{ block; sign_ext; zero_ext } = reduce_sign_ext block in
       treat (ExtTerm(Block{ block; sign_ext; zero_ext })) t
 
@@ -1128,7 +1125,7 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
         print 6 "Not implemented@,";
          Substs.nil
     in
-    let aux nexts (dx'_raw, modif) = treat dx'_raw modif in
+    let aux _nexts (dx'_raw, modif) = treat dx'_raw modif in
     let variants = LazyList.fold aux (lazy Substs.ident) variants.variants in
     Lazy.force variants
 
@@ -1138,7 +1135,6 @@ let solve_atom
     (atom : [`a2] Types.composite Types.termstruct)
     (polarity : bool)
   =
-  let open ExtTerm in
   let Types.A2(cons,e,t) = atom in
   print 6 "@[<2>solve_atom %a with lhs = %a and rhs = %a@]@,"
     Term.pp x
@@ -1194,51 +1190,47 @@ let solve_lit x lit substs =
 
 module CLL = CLazyList.Make(struct include Int let zero = 0 end)
 
-type accu
-
-
-let solve_list conjuncts old_conditions x value : (Term.t list * Term.t list) CLL.t =
-  print 5 "@[<hv2>solve_list solves %a (with value %a) from@,%a@,@[<v>"
-    Term.pp x
-    Term.pp value
-    (List.pp Term.pp) conjuncts;
-  let rec aux treated accu = function
-    | [] ->
-      begin match accu with
-        | Epsilon {body; conditions} ->
-          CLL.return (
-            Term.subst_terms [x,body] conjuncts,
-            conditions @ Term.subst_terms [x,body] old_conditions)
-        | _ ->
-          CLL.return (
-            conjuncts, old_conditions)
-      end
-      
-    | lit::tail ->
-      let open CLL in
-
-      match solve_lit x lit accu with
-
-      | Eliminate body ->
-        print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
-        CLL.return (
-          Term.subst_terms [x,body] conjuncts,
-          Term.subst_terms [x,body] old_conditions)
-
-      | NotGreat(Epsilon _ )
-        when List.exists (Term.fv x) treated
-          || List.exists (Term.fv x) tail
-          || List.exists (Term.fv x) old_conditions  ->
-        aux (lit::treated) accu tail
-
-      | NotGreat substs ->
-        aux (lit::treated) substs tail
-  in
-  let result = aux [] (NonLinear []) conjuncts in
-  print 5 "@]@]@,";
-  result
-
-
+(* type accu
+ * 
+ * let solve_list conjuncts old_conditions x value : (Term.t list * Term.t list) CLL.t =
+ *   print 5 "@[<hv2>solve_list solves %a (with value %a) from@,%a@,@[<v>"
+ *     Term.pp x
+ *     Term.pp value
+ *     (List.pp Term.pp) conjuncts;
+ *   let rec aux treated accu = function
+ *     | [] ->
+ *       begin match accu with
+ *         | Epsilon {body; conditions; _} ->
+ *           CLL.return (
+ *             Term.subst_terms [x,body] conjuncts,
+ *             conditions @ Term.subst_terms [x,body] old_conditions)
+ *         | _ ->
+ *           CLL.return (
+ *             conjuncts, old_conditions)
+ *       end
+ *       
+ *     | lit::tail ->
+ * 
+ *       match solve_lit x lit accu with
+ * 
+ *       | Eliminate body ->
+ *         print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
+ *         CLL.return (
+ *           Term.subst_terms [x,body] conjuncts,
+ *           Term.subst_terms [x,body] old_conditions)
+ * 
+ *       | NotGreat(Epsilon _ )
+ *         when List.exists (Term.fv x) treated
+ *           || List.exists (Term.fv x) tail
+ *           || List.exists (Term.fv x) old_conditions  ->
+ *         aux (lit::treated) accu tail
+ * 
+ *       | NotGreat substs ->
+ *         aux (lit::treated) substs tail
+ *   in
+ *   let result = aux [] (NonLinear []) conjuncts in
+ *   print 5 "@]@]@,";
+ *   result *)
 
 
 
@@ -1249,7 +1241,7 @@ let solve_list conjuncts old_conditions x : Term.t list * Term.t list =
   let rec aux treated accu = function
     | [] ->
       begin match accu with
-        | Epsilon {body; conditions} ->
+        | Epsilon {body; conditions; _} ->
           print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
           (* let aux conjunct =
            *   let new_conjunct = Term.subst_term [x,body] conjunct in
@@ -1308,8 +1300,6 @@ let get_conjuncts t =
 
 
 let solve_all vars t =
-  let open Term in
-  let open Types in
   let conjuncts = get_conjuncts t in
   print 3 "@[<2>IC analyses %a@]@," Term.pp t;
   let rec aux conjuncts conditions = function
