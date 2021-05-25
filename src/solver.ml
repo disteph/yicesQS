@@ -690,7 +690,7 @@ let treat filename =
            | None -> ());
           assertions := formula::!assertions
 
-        | "check-sat", [], Some _env ->
+        | "check-sat", [], Some env ->
           let formula = Term.(andN !assertions) in
           print 2 "@[<v 2>@[Computing game@]@,";
           let (module G) as game = Game.process session.config
