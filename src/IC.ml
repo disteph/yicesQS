@@ -1039,9 +1039,10 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
         else treat e_i t' ||> recurs_call accu tail
         (* Linear case treated immediately doesn't go further if it comes back with Eliminate *)
     in
+    (* The following function tests if a bvsum l is a monomial whose coeff is 1 or -1 *)
     let test_poly = function
       | _::_::_ | [_, None] | [] -> true
-      | [coeff, Some var] ->
+      | [coeff, Some _var] ->
         match coeff with
           | true::tail when List.for_all (fun b -> b) tail -> true  (* coeff is -1 *)
           | true::tail when List.for_all (fun b -> not b) tail -> true (* coeff is 1 *)
@@ -1128,7 +1129,7 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
         print 6 "Not implemented@,";
          Substs.nil
     in
-    let aux nexts (dx'_raw, modif) = treat dx'_raw modif in
+    let aux _nexts (dx'_raw, modif) = treat dx'_raw modif in
     let variants = LazyList.fold aux (lazy Substs.ident) variants.variants in
     Lazy.force variants
 
@@ -1195,51 +1196,47 @@ let solve_lit x lit substs =
 
 module CLL = CLazyList.Make(struct include Int let zero = 0 end)
 
-type accu
-
-
-let solve_list conjuncts old_conditions x value : (Term.t list * Term.t list) CLL.t =
-  print 5 "@[<hv2>solve_list solves %a (with value %a) from@,%a@,@[<v>"
-    Term.pp x
-    Term.pp value
-    (List.pp Term.pp) conjuncts;
-  let rec aux treated accu = function
-    | [] ->
-      begin match accu with
-        | Epsilon {body; conditions; epsilon = _} ->
-          CLL.return (
-            Term.subst_terms [x,body] conjuncts,
-            conditions @ Term.subst_terms [x,body] old_conditions)
-        | _ ->
-          CLL.return (
-            conjuncts, old_conditions)
-      end
-      
-    | lit::tail ->
-
-      match solve_lit x lit accu with
-
-      | Eliminate body ->
-        print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
-        CLL.return (
-          Term.subst_terms [x,body] conjuncts,
-          Term.subst_terms [x,body] old_conditions)
-
-      | NotGreat(Epsilon _ )
-        when List.exists (Term.fv x) treated
-          || List.exists (Term.fv x) tail
-          || List.exists (Term.fv x) old_conditions  ->
-        aux (lit::treated) accu tail
-
-      | NotGreat substs ->
-        aux (lit::treated) substs tail
-  in
-  let result = aux [] (NonLinear []) conjuncts in
-  print 5 "@]@]@,";
-  result
-
-
-
+(* type accu
+ * 
+ * let solve_list conjuncts old_conditions x value : (Term.t list * Term.t list) CLL.t =
+ *   print 5 "@[<hv2>solve_list solves %a (with value %a) from@,%a@,@[<v>"
+ *     Term.pp x
+ *     Term.pp value
+ *     (List.pp Term.pp) conjuncts;
+ *   let rec aux treated accu = function
+ *     | [] ->
+ *       begin match accu with
+ *         | Epsilon {body; conditions; _} ->
+ *           CLL.return (
+ *             Term.subst_terms [x,body] conjuncts,
+ *             conditions @ Term.subst_terms [x,body] old_conditions)
+ *         | _ ->
+ *           CLL.return (
+ *             conjuncts, old_conditions)
+ *       end
+ *       
+ *     | lit::tail ->
+ * 
+ *       match solve_lit x lit accu with
+ * 
+ *       | Eliminate body ->
+ *         print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
+ *         CLL.return (
+ *           Term.subst_terms [x,body] conjuncts,
+ *           Term.subst_terms [x,body] old_conditions)
+ * 
+ *       | NotGreat(Epsilon _ )
+ *         when List.exists (Term.fv x) treated
+ *           || List.exists (Term.fv x) tail
+ *           || List.exists (Term.fv x) old_conditions  ->
+ *         aux (lit::treated) accu tail
+ * 
+ *       | NotGreat substs ->
+ *         aux (lit::treated) substs tail
+ *   in
+ *   let result = aux [] (NonLinear []) conjuncts in
+ *   print 5 "@]@]@,";
+ *   result *)
 
 
 let solve_list conjuncts old_conditions x : Term.t list * Term.t list =
