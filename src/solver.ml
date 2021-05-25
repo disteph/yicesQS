@@ -344,7 +344,7 @@ type answer =
 
 exception BadInterpolant of SolverState.t * Level.t * Term.t
 exception BadUnder of SolverState.t * Level.t * Term.t
-exception FromYicesException of SolverState.t * Level.t * Types.error_report
+exception FromYicesException of SolverState.t * Level.t * Types.error_report * string
 exception WrongAnswer of SolverState.t * answer
 
 module THash = Hashtbl.Make'(Term)
@@ -442,7 +442,8 @@ let check state level model support reason = ()
 
 [%%endif]
 
-let rec solve state level model support : answer = try
+let rec solve state level model support : answer =
+  try
     let (module S:SolverState.T) = state in
     let open S in
     print 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
@@ -481,7 +482,7 @@ let rec solve state level model support : answer = try
 
   with
     ExceptionsErrorHandling.YicesException(_,report) ->
-    raise (FromYicesException(state, level,report))
+    raise (FromYicesException(state, level,report, Printexc.get_backtrace()))
 
 and post_process state level model support =
   print 1 "@[<v 1> ";
@@ -653,6 +654,7 @@ let treat filename =
   let set_logic logic config =
     print 3 "@[Setting logic to %s@]@," logic;
     Config.set config ~name:"solver-type" ~value:"mcsat";
+    Config.set config ~name:"model-interpolation" ~value:"true";
     Config.set config ~name:"mode" ~value:"multi-checks"
   in
   let session    = Session.create ~set_logic 0 in

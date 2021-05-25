@@ -87,14 +87,16 @@ match !args with
      let subdir = "bad_interpolant" in
      copyNtrace              filename subdir state |> if_filedump;
      print_trace_with_assert filename subdir ~suffix:"interpolant_check" state interpolant |> if_filedump;
-     Format.(fprintf stdout) "Interpolant at level %i:@,%a@]%!" level.id Term.pp interpolant;
+     Format.(fprintf stdout) "Interpolant at level %i:@,@[<v>%a@]@," level.id Term.pp interpolant;
+     Format.(fprintf stdout) "Backtrace is:@,@[%s@]@]%!" (Printexc.get_backtrace());
      raise exc
 
    | BadUnder(state, level, under) as exc ->
      let subdir = "bad_under" in
      copyNtrace              filename subdir state |> if_filedump;
      print_trace_with_assert filename subdir ~suffix:"under_check" state under |> if_filedump;
-     Format.(fprintf stdout) "Under at level %i:@,%a@]%!" level.id Term.pp under;
+     Format.(fprintf stdout) "Under at level %i:@,@[<v>%a@]@," level.id Term.pp under;
+     Format.(fprintf stdout) "Backtrace is:@,@[%s@]@]%!" (Printexc.get_backtrace());
      raise exc
 
    | WrongAnswer(state, answer) as exc ->
@@ -102,18 +104,20 @@ match !args with
      Format.(fprintf stdout) "@[Wrong answer!: %a@]@]%!" pp_answer answer;
      raise exc
 
-   | FromYicesException(state, level, report) as exc ->
+   | FromYicesException(state, level, report, bcktrace) as exc ->
      copyNtrace filename "yices_exc" state |> if_filedump;
      Format.(fprintf stdout) "@[Yices error at level %i: @[%s@]@]@,"
        level.id
        (ErrorPrint.string());
-     Format.(fprintf stdout) "@[Error report:@,@[<v2>  %a@]@]@]%!"
+     Format.(fprintf stdout) "@[Error report:@,@[<v2>  %a@]@,"
        Types.pp_error_report report;
+     Format.(fprintf stdout) "@[Backtrace is:@,@[%s@]@]@]%!" bcktrace;
      raise exc
 
    | Yices_SMT2_exception s as exc ->
      copy_input filename "SMT_exc" |> if_filedump;
-     Format.(fprintf stdout) "@[SMT2 error: %s@]@]%!" s;
+     Format.(fprintf stdout) "@[SMT2 error: %s@]@," s;
+     Format.(fprintf stdout) "Backtrace is:@,@[%s@]@]%!" (Printexc.get_backtrace());
      raise exc
 
   )
