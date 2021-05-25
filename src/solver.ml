@@ -8,14 +8,13 @@ open Yices2.Ext_bindings
 open Yices2.SMT2
 
 open Command_options
-open IC
 
-let ppl ~prompt pl fmt l = match l with
-  | [] -> ()
-  | _::_ -> Format.fprintf fmt "@,@[<v 2>%s %i formula(e)@,%a@]"
-              prompt
-              (List.length l)
-              (List.pp pl) l
+(* let ppl ~prompt pl fmt l = match l with
+ *   | [] -> ()
+ *   | _::_ -> Format.fprintf fmt "@,@[<v 2>%s %i formula(e)@,%a@]"
+ *               prompt
+ *               (List.length l)
+ *               (List.pp pl) l *)
 
 let pp_space fmt () = Format.fprintf fmt " @,"
 
@@ -44,7 +43,7 @@ module Level = struct
     }
 
 
-  let rec pp fmt {id; rigid; newvars; foralls}
+  let rec pp fmt {id; rigid; newvars; foralls; ground = _}
     = Format.fprintf fmt "@[<v>\
                           Level id: %i@,\
                           %i ancestors' variables: @[<hov>%a@]@,\
@@ -56,7 +55,7 @@ module Level = struct
       (List.length newvars)
       (List.pp ~pp_sep:pp_space Term.pp) newvars
       pp_foralls foralls
-  and pp_forall fmt {name; selector; sublevel} =
+  and pp_forall fmt {name; selector = _ ; sublevel; selector_context = _} =
     Format.fprintf fmt "@[<v 2>%a opens sub-level@,%a@]"
       Term.pp name
       pp sublevel
@@ -67,7 +66,7 @@ module Level = struct
 
   let rec free level =
     List.iter free_forall level.foralls
-  and free_forall {selector_context; sublevel} =
+  and free_forall {selector_context; sublevel; _} =
     Context.free selector_context;
     free sublevel
     
@@ -193,7 +192,7 @@ module Game = struct
               let universals   = List.append SubGame.universals   (universal::state.universals) in
               name, { newvars; foralls; existentials; universals }
           end
-      | Bindings { c = `YICES_LAMBDA_TERM } -> raise(CannotTreat t)
+      | Bindings { c = `YICES_LAMBDA_TERM; _} -> raise(CannotTreat t)
       | A0 _ -> return t
       | _ ->
         let+ x = map aux a in return(Term.build x)
@@ -227,7 +226,6 @@ module SolverState = struct
   type t = (module T)
 
   let pp fmt (module T:T) =
-    let open T in
     Format.fprintf fmt "@[<v>\
                         @[%a@]\
                         @]"
@@ -545,7 +543,7 @@ and treat_sat state level model support =
 
       (* Now we produce the model to feed the recursive call and perform the call.
          We get back the status of the call and the model that we fed to it *)
-      let recurs_status, recurs_model =
+      let recurs_status, _recurs_model =
         (* if Model.get_bool_value model o.selector
          * then (\* The selector for this subformula is already true *\)
          *   (print 4 "@[Model already makes %a true, we stick to the same model@]@,"
@@ -626,7 +624,7 @@ and treat_sat state level model support =
   let cumulated_support = match support with
     (* If our own support is not empty, the first element is our own trigger:
        we keep it as well as the values passed to the recursive call but its own trigger *)
-    | S{ trigger } -> [trigger]
+    | S{ trigger; _ } -> [trigger]
     | Empty -> [] (* otherwise we just keep those values *)
   in
   aux model cumulated_support [] level.foralls
@@ -673,7 +671,7 @@ let treat filename =
            | None -> ());
           assertions := formula::!assertions
 
-        | "check-sat", [], Some env ->
+        | "check-sat", [], Some _env ->
           let formula = Term.(andN !assertions) in
           print 2 "@[<v 2>@[Computing game@]@,";
           let (module G) as game = Game.process session.config

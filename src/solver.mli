@@ -1,5 +1,4 @@
 open Containers
-open Yices2.High
 open Yices2.Ext_bindings
 
 module Level : sig
