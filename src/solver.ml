@@ -672,6 +672,9 @@ let treat filename =
         | "set-info",   [Atom ":status"; Atom "unsat"],   _ ->
           expected := Some false
 
+        | "set-option", _, _ ->
+           ()
+
         | "declare-fun", [Atom name; List []; typ], Some env
         | "declare-const", [Atom name; typ], Some env ->
           let ytype = ParseType.parse env.types typ |> Cont.get in
