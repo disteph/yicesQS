@@ -438,7 +438,7 @@ let check state level model support reason =
 
 [%%else]
 
-let check state level model support reason = ()
+let check _state _level _model _support _reason = ()
 
 [%%endif]
 
@@ -648,7 +648,24 @@ and treat_sat state level model support =
   in
   aux model cumulated_support [] level.foralls
 
+[%%if debug_mode]
+let return answer expected =
+  match answer, expected with
+  | Unsat _, None -> "unsat?"
+  | Sat _, None -> "sat?"
+  | Unsat _, Some false -> "unsat!"
+  | Sat _, Some true -> "sat!"
+  | Unsat _, Some true 
+    | Sat _, Some false -> raise (WrongAnswer(state, answer))
+[%%else]
+let return answer _expected =
+  match answer with
+  | Unsat _ -> "unsat"
+  | Sat _ -> "sat"
+[%%endif]
 
+
+  
 let treat filename =
   let sexps = SMT2.load_file filename in
   let set_logic logic config =
@@ -673,6 +690,9 @@ let treat filename =
 
         | "set-info",   [Atom ":status"; Atom "unsat"],   _ ->
           expected := Some false
+
+        | "set-option", _, _ ->
+           ()
 
         | "declare-fun", [Atom name; List []; typ], Some env
         | "declare-const", [Atom name; typ], Some env ->
@@ -705,14 +725,7 @@ let treat filename =
           print 1 "@[<v>";
           let answer = solve state G.top_level (Model.from_map []) Support.Empty in
           print 1 "@]@,";
-          let str = match answer, !expected with
-            | Unsat _, None -> "unsat?"
-            | Sat _, None -> "sat?"
-            | Unsat _, Some false -> "unsat!"
-            | Sat _, Some true -> "sat!"
-            | Unsat _, Some true 
-            | Sat _, Some false -> raise (WrongAnswer(state, answer))
-          in
+          let str = return answer !expected in
           Format.(fprintf stdout) "@[%s@]@," str;
           states := state::!states;
           (* SolverState.free initial_state; *)

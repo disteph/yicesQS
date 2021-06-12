@@ -1,3 +1,5 @@
+[%%import "debug.mlh"]
+
 open Containers
 open Yices2.Ext_bindings
 
@@ -81,7 +83,9 @@ module SolverState : sig
       include Game.T
       val logic : string
       val context : Context.t
+[%%if debug_mode]
       val epsilons_context : Context.t
+[%%endif]
     end
   type t = (module T)
   val pp : t Format.printer
