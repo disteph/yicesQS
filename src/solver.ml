@@ -510,11 +510,15 @@ and treat_sat state level model support =
       let seq =
          print 1 "@,Sent for generalization:@, %a@," Term.pp true_of_model;
          (* print 0 "@,%a" (List.pp Term.pp) Level.(level.newvars); *)
-        try
-          Model.generalize_model model true_of_model Level.(level.newvars) `YICES_GEN_BY_PROJ
-          |> Term.andN |> fun x -> CLL.return (x,[])
-        with ExceptionsErrorHandling.YicesException _ ->
-          generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
+         if String.equal S.logic "QF_NRA"
+         then
+           try
+             Model.generalize_model model true_of_model Level.(level.newvars) `YICES_GEN_BY_PROJ
+             |> Term.andN |> fun x -> CLL.return (x,[])
+           with ExceptionsErrorHandling.YicesException _ ->
+             generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
+         else
+           generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
       in
       let rec extract
                 (accu : Term.t list)
