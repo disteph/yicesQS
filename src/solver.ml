@@ -149,7 +149,7 @@ module Game = struct
   let rec miniscope1 var kind t =
     match Term.reveal t, kind with
     | Term(A0(_, c)), _ when not(Term.equal var c) -> c
-    | Term(Astar(`YICES_OR_TERM, l)), `ForAll ->
+    | Term(Astar(`YICES_OR_TERM, l)), _ ->
        let aux (l_with, l_without) disjunct =
          if Term.fv var disjunct
          then (disjunct::l_with, l_without)
@@ -157,10 +157,11 @@ module Game = struct
        in
        let l_with, l_without = List.fold_left aux ([],[]) l in
        let l_with =
-         match l_with with
-         | _::_::_ -> Term.(forall [var] (orN l_with))
-         | [a] -> miniscope1 var kind a
-         | [] -> Term.orN []
+         match l_with, kind with
+         | _::_::_, `ForAll -> Term.(forall [var] (orN l_with))
+         | _::_::_, `Exists -> Term.(exists [var] (orN l_with))
+         | [a], _ -> miniscope1 var kind a
+         | [], _ -> Term.orN []
        in
        Term.orN(l_with::l_without)
 
