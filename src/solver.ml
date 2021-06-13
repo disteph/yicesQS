@@ -525,12 +525,12 @@ and treat_sat state level model support =
          (* print 0 "@,%a" (List.pp Term.pp) Level.(level.newvars); *)
          if String.equal S.logic "QF_NRA"
          then
-           try
-             let true_of_model = denum_elim model true_of_model in
+           (* try
+            *   let true_of_model = denum_elim model true_of_model in *)
              Model.generalize_model model true_of_model Level.(level.newvars) `YICES_GEN_BY_PROJ
              |> Term.andN |> fun x -> CLL.return (x,[])
-           with ExceptionsErrorHandling.YicesException _ ->
-             generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
+           (* with ExceptionsErrorHandling.YicesException _ ->
+            *   generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars) *)
          else
            generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
       in
