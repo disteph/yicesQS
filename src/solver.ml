@@ -444,15 +444,17 @@ let check _state _level _model _support _reason = ()
 
 let rec denum_elim model t =
   match Term.reveal t with
+  | Term(A0 _) -> t
   | Term(A2(`YICES_RDIV, num, denum)) ->
      let num = denum_elim model num in
-     let cst =
-       Model.get_value_as_term model denum
-       |> Term.rational_const_value
-       |> Q.inv
-       |> Term.Arith.mpq
-     in
-     Term.Arith.(cst ** num)
+     let denum = Model.get_value_as_term model denum |> Term.rational_const_value in
+     if Q.(equal denum zero) then raise Division_by_zero
+     else
+       let cst = denum
+                 |> Q.inv
+                 |> Term.Arith.mpq
+       in
+       Term.Arith.mul cst num
   | Term b -> Term.(build(map (denum_elim model) b))
 
 let rec solve state level model support : answer =
@@ -523,14 +525,14 @@ and treat_sat state level model support =
       let seq =
          print 1 "@,Sent for generalization:@, %a@," Term.pp true_of_model;
          (* print 0 "@,%a" (List.pp Term.pp) Level.(level.newvars); *)
-         if String.equal S.logic "QF_NRA"
+         if String.equal S.logic "NRA"
          then
-           (* try *)
+           try
              let true_of_model = denum_elim model true_of_model in
              Model.generalize_model model true_of_model Level.(level.newvars) `YICES_GEN_BY_PROJ
              |> Term.andN |> fun x -> CLL.return (x,[])
-           (* with ExceptionsErrorHandling.YicesException _ ->
-            *   generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars) *)
+           with _ ->
+             generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
          else
            generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
       in
