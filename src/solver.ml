@@ -146,6 +146,48 @@ module Game = struct
 
   let foralls_rev = HTerm.create 10
 
+  let rec miniscope1 var kind t =
+    match Term.reveal t, kind with
+    | Term(A0(_, c)), _ when not(Term.equal var c) -> c
+    | Term(Astar(`YICES_OR_TERM, l)), `ForAll ->
+       let aux (l_with, l_without) disjunct =
+         if Term.fv var disjunct
+         then (disjunct::l_with, l_without)
+         else (l_with, disjunct::l_without)
+       in
+       let l_with, l_without = List.fold_left aux ([],[]) l in
+       let l_with =
+         match l_with with
+         | _::_::_ -> Term.(forall [var] (orN l_with))
+         | [a] -> miniscope1 var kind a
+         | [] -> Term.orN []
+       in
+       Term.orN(l_with::l_without)
+
+    | Term(Astar(`YICES_OR_TERM, l)), `Exists ->
+       Term.orN(List.map (miniscope1 var kind) l)
+       
+    | Term(A1(`YICES_NOT_TERM, body)), `ForAll -> Term.not1(miniscope1 var `Exists body)
+    | Term(A1(`YICES_NOT_TERM, body)), `Exists -> Term.not1(miniscope1 var `ForAll body)
+    | Term(Bindings { c = `YICES_FORALL_TERM; vars; body }), _ ->
+       Term.forall vars (miniscope1 var kind body)
+
+    | _, `ForAll -> Term.forall [var] t 
+    | _, `Exists -> Term.exists [var] t 
+
+  let miniscopeN vars kind t =
+    let aux sofar var = miniscope1 var kind sofar in
+    List.fold_left aux t vars
+
+  let rec miniscope t =
+    match Term.reveal t with
+    | Term(A0 _) -> t
+    | Term(Bindings { c = `YICES_FORALL_TERM; vars; body }) ->
+       body |> miniscope |> miniscopeN vars `ForAll
+    | Term b -> Term.(build(map miniscope b))
+
+
+                  
   (* rigidintro = rigid + intro *)
   let rec process config ~rigidintro ~rigid ~intro body : game =
 
@@ -156,42 +198,44 @@ module Game = struct
                    vars;
                    body }
         ->
-        if false
-        then
-          return(HTerm.find foralls_rev t) (* returns placeholder previously generated *)
-        else
-          begin
-            (* Creating a selector for the forall formula *)
-            incr counter;
-            let freshcount = string_of_int !counter in
-            let name  = "trig"^freshcount in
-            let selector = Term.new_uninterpreted ~name (Type.bool()) in
-            (* Creating a name for the forall formula *)
-            let name  = "name"^freshcount in
-            let name  = Term.new_uninterpreted ~name (Type.bool()) in
-            HTerm.add foralls_rev t name;
-            let substituted, rigidintro_sub, intro_sub = fresh rigidintro vars body in
-            let (module SubGame) =
-              process config
-                ~rigidintro:rigidintro_sub
-                ~rigid:rigidintro
-                ~intro:intro_sub
-                (Term.not1 substituted) in
-            let selector_context = Context.malloc ~config () in
-            Context.assert_formula selector_context selector;
-            let newforall =
-              Level.{ name; selector; selector_context; sublevel = SubGame.top_level }
-            in
-            let existential = Term.(name ||| SubGame.ground) in
-            let universal   = Term.(selector === SubGame.ground) in
-            fun state ->
-              print 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
-              let newvars = List.append SubGame.top_level.newvars (name::selector::state.newvars) in
-              let foralls = List.append SubGame.top_level.foralls (newforall::state.foralls) in
-              let existentials = List.append SubGame.existentials (existential::state.existentials) in
-              let universals   = List.append SubGame.universals   (universal::state.universals) in
-              name, { newvars; foralls; existentials; universals }
-          end
+         begin
+           if false
+           then
+             return(HTerm.find foralls_rev t) (* returns placeholder previously generated *)
+           else
+             begin
+               (* Creating a selector for the forall formula *)
+               incr counter;
+               let freshcount = string_of_int !counter in
+               let name  = "trig"^freshcount in
+               let selector = Term.new_uninterpreted ~name (Type.bool()) in
+               (* Creating a name for the forall formula *)
+               let name  = "name"^freshcount in
+               let name  = Term.new_uninterpreted ~name (Type.bool()) in
+               HTerm.add foralls_rev t name;
+               let substituted, rigidintro_sub, intro_sub = fresh rigidintro vars body in
+               let (module SubGame) =
+                 process config
+                   ~rigidintro:rigidintro_sub
+                   ~rigid:rigidintro
+                   ~intro:intro_sub
+                   (Term.not1 substituted) in
+               let selector_context = Context.malloc ~config () in
+               Context.assert_formula selector_context selector;
+               let newforall =
+                 Level.{ name; selector; selector_context; sublevel = SubGame.top_level }
+               in
+               let existential = Term.(name ||| SubGame.ground) in
+               let universal   = Term.(selector === SubGame.ground) in
+               fun state ->
+               print 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
+               let newvars = List.append SubGame.top_level.newvars (name::selector::state.newvars) in
+               let foralls = List.append SubGame.top_level.foralls (newforall::state.foralls) in
+               let existentials = List.append SubGame.existentials (existential::state.existentials) in
+               let universals   = List.append SubGame.universals   (universal::state.universals) in
+               name, { newvars; foralls; existentials; universals }
+             end
+         end
       | Bindings { c = `YICES_LAMBDA_TERM; _ } -> raise(CannotTreat t)
       | A0 _ -> return t
       | _ ->
@@ -731,7 +775,7 @@ let treat filename =
           assertions := formula::!assertions
 
         | "check-sat", [], Some env ->
-          let formula = Term.(andN !assertions) in
+          let formula = Term.(andN !assertions) |> Game.miniscope in
           print 2 "@[<v 2>@[Computing game@]@,";
           let (module G) as game = Game.process session.config
               ~rigidintro:!support
