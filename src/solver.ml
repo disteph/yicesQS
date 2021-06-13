@@ -442,6 +442,19 @@ let check _state _level _model _support _reason = ()
 
 [%%endif]
 
+let rec denum_elim model t =
+  match Term.reveal t with
+  | Term(A2(`YICES_RDIV, num, denum)) ->
+     let num = denum_elim model num in
+     let cst =
+       Model.get_value_as_term model denum
+       |> Term.rational_const_value
+       |> Q.inv
+       |> Term.Arith.mpq
+     in
+     Term.Arith.(cst ** num)
+  | Term b -> Term.(build(map (denum_elim model) b))
+
 let rec solve state level model support : answer =
   try
     let (module S:SolverState.T) = state in
@@ -513,6 +526,7 @@ and treat_sat state level model support =
          if String.equal S.logic "QF_NRA"
          then
            try
+             let true_of_model = denum_elim model true_of_model in
              Model.generalize_model model true_of_model Level.(level.newvars) `YICES_GEN_BY_PROJ
              |> Term.andN |> fun x -> CLL.return (x,[])
            with ExceptionsErrorHandling.YicesException _ ->
