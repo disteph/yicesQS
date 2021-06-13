@@ -164,8 +164,8 @@ module Game = struct
        in
        Term.orN(l_with::l_without)
 
-    | Term(Astar(`YICES_OR_TERM, l)), `Exists ->
-       Term.orN(List.map (miniscope1 var kind) l)
+    (* | Term(Astar(`YICES_OR_TERM, l)), `Exists ->
+     *    Term.orN(List.map (miniscope1 var kind) l) *)
        
     | Term(A1(`YICES_NOT_TERM, body)), `ForAll -> Term.not1(miniscope1 var `Exists body)
     | Term(A1(`YICES_NOT_TERM, body)), `Exists -> Term.not1(miniscope1 var `ForAll body)
