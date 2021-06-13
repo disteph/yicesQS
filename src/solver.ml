@@ -169,7 +169,8 @@ module Game = struct
        
     | Term(A1(`YICES_NOT_TERM, body)), `ForAll -> Term.not1(miniscope1 var `Exists body)
     | Term(A1(`YICES_NOT_TERM, body)), `Exists -> Term.not1(miniscope1 var `ForAll body)
-    | Term(Bindings { c = `YICES_FORALL_TERM; vars; body }), _ ->
+
+    | Term(Bindings { c = `YICES_FORALL_TERM; vars; body }), `ForAll ->
        Term.forall vars (miniscope1 var kind body)
 
     | _, `ForAll -> Term.forall [var] t 
