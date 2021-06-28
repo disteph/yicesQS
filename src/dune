@@ -2,6 +2,7 @@
  (name main)
  (libraries sexplib containers zarith yices2_bindings)
  (flags (:standard -cclib -lyices))
+ (promote (until-clean) (into ".."))
  (preprocess (pps ppx_optcomp ppx_deriving.std))
 )
 
