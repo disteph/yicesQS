@@ -31,8 +31,13 @@ type answer =
   
 exception FromYicesException of Types.error_report * string
 
+let print i fs = Format.((if !verbosity >= i then fprintf else ifprintf) stdout) fs
+let flush () = Format.(fprintf stdout) "@]%!@[<v>"
+
 let treat filename =
+  print 1 "@,@[Parsing file@]";
   let l = CCIO.(with_in filename read_lines_l) in
+  print 1 "@,@[done. building CNF in memory.@]";
   let nb_var     = ref (-1) in
   let nb_clauses = ref (-1) in
   let skip_zero clause s =
@@ -54,10 +59,11 @@ let treat filename =
   in
   let cnf = List.fold_left aux [] l in
   let nb_var = !nb_var in
+  print 1 "@,@[done, with %d bits@]" nb_var;
   Global.init();
   let bool_type = Type.bool() in
   let true_term = Term.true0() in
-  let false_term = Term.true0() in
+  let false_term = Term.false0() in
   let int2var = Array.make nb_var true_term in
   (* let var2int = HTerm.create (4 * nb_var) in *)
   for i = 1 to nb_var do
@@ -87,9 +93,11 @@ let treat filename =
        | `STATUS_INTERRUPTED
        | `STATUS_SEARCHING
        | `STATUS_UNKNOWN -> failwith "Status error in 1st run"
-    | `STATUS_UNSAT -> Unsat
+    | `STATUS_UNSAT ->
+       Unsat
     | `STATUS_SAT ->
        print 1 "@,@[sat. looking for free bits@]";
+       print 1 "@,@[Formula is %a@]" Term.pp valid;
        (* let bits = Array.make nb_var Free in
         * let free_bits () =
         *   let c = ref 0 in
@@ -100,9 +108,11 @@ let treat filename =
         *   done;
         *   !c
         * in *)
+       flush();
        let fixed_bits = ref 0 in
        let record_model context array =
          let model = Context.get_model context ~keep_subst:true in
+         print 2 "@,@[Recording model %a@]" Model.pp model;
          for i = 1 to nb_var do
            let b = Model.get_bool_value model (int2var i) in
            Array.set array (i-1) b
@@ -135,7 +145,7 @@ let treat filename =
                last_diff := i
              end
          done;
-         if !diff_count <=1 then Some !last_diff
+         if !diff_count <= 1 then Some !last_diff
          else None
        in
        let dichotomy() =
@@ -148,18 +158,20 @@ let treat filename =
               if Model.formula_true_in_model model valid
               then
                 begin
+                  let tmp = !true_model in
                   true_model := !next_model;
-                  next_model := !true_model
+                  next_model := tmp
                 end
               else
                 begin
+                  let tmp = !false_model in
                   false_model := !next_model;
-                  next_model := !false_model
+                  next_model := tmp
                 end
            | Some _ -> ()
          done;
          let diff_bit = Option.get_exn_or "bad while" !bit in
-         diff_bit, Array.get !true_model diff_bit
+         diff_bit+1, Array.get !true_model diff_bit
        in
        let rec fbf_loop = function
          |  `STATUS_ERROR
@@ -170,25 +182,22 @@ let treat filename =
          | `STATUS_SAT ->
             record_model negative !false_model;
             let diff_bit, good_val = dichotomy() in
-            let fixed = Term.(int2var diff_bit === (if good_val then true_term else false_term)) in
+            let fixed = Term.(if good_val then int2var diff_bit else not1(int2var diff_bit)) in
+            print 2 "@,@[Adding assumption %a@]" Term.pp fixed;
             Context.assert_formula negative fixed;
             incr fixed_bits;
-            print 2 "@,@[fixing %dth bit]" !fixed_bits;
+            print 2 "@,@[fixing %dth bit: bit %d to %b@]" !fixed_bits diff_bit good_val;
             let status = Context.check ~param negative in
-            print 3 "@,@[Updated context_false]";
+            print 3 "@,@[Updated context_false@]";
             fbf_loop status
          | `STATUS_UNSAT ->
             Sat{ free = nb_var - !fixed_bits; total = nb_var }
        in
-       print 3 "@,@[Checking context_false]";
+       print 3 "@,@[Checking context_false@]";
        let status = Context.check ~param negative in
-       print 3 "@,@[Updated context_false]";
+       print 3 "@,@[Updated context_false@]";
        fbf_loop status
   in
   match answer with
   | Unsat -> Format.(fprintf stdout) "unsat";
   | Sat{free;total} -> Format.(fprintf stdout) "sat %d %d" free total;
-
-                              (* let config = Config.malloc () in *)
-                              (* Config.set config ~name:"solver-type" ~value:"mcsat"; *)
-                              (* Config.set config ~name:"model-interpolation" ~value:"true"; *)

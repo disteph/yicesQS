@@ -21,7 +21,7 @@ match !args with
 | [filename] ->
      Format.(fprintf stdout) "@[<v>";
      treat filename;
-     Format.(fprintf stdout) "@]%!";
+     Format.(fprintf stdout) "@]@,%!";
 | [] -> failwith "Too few arguments in the command"
 | _ -> failwith "Too many arguments in the command";;
 
