@@ -190,10 +190,11 @@ let treat filename =
          record_model negative !false_model;
          let diff_bit, good_val = dichotomy() in
          let fixed = Term.(if good_val then int2var diff_bit else not1(int2var diff_bit)) in
-         print 2 "@,@[Adding assumption %a@]" Term.pp fixed;
+         print 3 "@,@[Adding assumption %a@]" Term.pp fixed;
          Context.assert_formula negative fixed;
          incr fixed_bits;
          print 2 "@,@[fixing %dth bit: bit %d to %b@]" !fixed_bits diff_bit good_val;
+         flush();
          status := Context.check ~param negative;
          print 3 "@,@[Updated context_false@]";
        done;
