@@ -1,7 +1,8 @@
 (executable
  (name main)
- (libraries sexplib containers zarith yices2_bindings)
+ (libraries containers zarith yices2_bindings)
  (flags (:standard -cclib -lyices))
+ (modes exe)
  (promote (until-clean) (into ".."))
  (preprocess (pps ppx_optcomp ppx_deriving.std))
 )
