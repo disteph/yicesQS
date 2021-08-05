@@ -71,8 +71,10 @@ let treat filename =
   let clause_term clause = Term.orN (List.rev_map literal_term clause) in
   let valid = Term.andN (List.rev_map clause_term cnf) in
 
-  let positive = Context.malloc () in
-  let negative = Context.malloc () in
+  let config = Config.malloc () in
+  Config.default ~logic:"QF_BV" config;
+  let positive = Context.malloc ~config () in
+  let negative = Context.malloc ~config () in
   let param    = Param.malloc () in
   Param.set param ~name:"branching" ~value:"positive";
   Context.assert_formula positive valid;
