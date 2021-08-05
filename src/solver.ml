@@ -141,8 +141,10 @@ let treat filename =
          for i = 0 to nb_var - 1 do
            let btrue  = Array.get !true_model  i in
            let bfalse = Array.get !false_model i in
-           if not(Bool.equal btrue bfalse)
+           if Bool.equal btrue bfalse
            then
+             Array.set !next_model i btrue
+           else
              begin
                Array.set !next_model i (if !side then btrue else bfalse);
                side := not !side;
@@ -150,6 +152,8 @@ let treat filename =
                last_diff := i
              end
          done;
+         print 5 "@,@[Distance %d@]" !diff_count;
+         flush();
          if !diff_count <= 1 then Some !last_diff
          else None
        in
@@ -186,6 +190,7 @@ let treat filename =
          | `STATUS_SAT -> true
          | _ -> false
        in
+       flush();
        while is_sat !status do
          record_model negative !false_model;
          let diff_bit, good_val = dichotomy() in
@@ -197,6 +202,7 @@ let treat filename =
          flush();
          status := Context.check ~param negative;
          print 3 "@,@[Updated context_false@]";
+         flush();
        done;
        match !status with
        | `STATUS_UNSAT ->
