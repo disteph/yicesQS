@@ -114,7 +114,7 @@ let treat filename =
        let fixed_bits = ref 0 in
        let record_model context array =
          let model = Context.get_model context ~keep_subst:true in
-         print 2 "@,@[Recording model %a@]" Model.pp model;
+         print 4 "@,@[Recording model %a@]" Model.pp model;
          for i = 1 to nb_var do
            let b = Model.get_bool_value model (int2var i) in
            Array.set array (i-1) b
