@@ -79,6 +79,7 @@ let treat filename =
   Param.set param ~name:"branching" ~value:"positive";
   Context.assert_formula positive valid;
   Context.assert_formula negative (Term.not1 valid);
+  print 2 "@,@[Starting first run (%d vars, %d clauses)@]" nb_var !nb_clauses;
   let answer =
     match Context.check ~param positive with
     |  `STATUS_ERROR
@@ -88,6 +89,7 @@ let treat filename =
        | `STATUS_UNKNOWN -> failwith "Status error in 1st run"
     | `STATUS_UNSAT -> Unsat
     | `STATUS_SAT ->
+       print 1 "@,@[sat. looking for free bits@]";
        (* let bits = Array.make nb_var Free in
         * let free_bits () =
         *   let c = ref 0 in
@@ -171,11 +173,17 @@ let treat filename =
             let fixed = Term.(int2var diff_bit === (if good_val then true_term else false_term)) in
             Context.assert_formula negative fixed;
             incr fixed_bits;
-            fbf_loop (Context.check ~param negative)
+            print 2 "@,@[fixing %dth bit]" !fixed_bits;
+            let status = Context.check ~param negative in
+            print 3 "@,@[Updated context_false]";
+            fbf_loop status
          | `STATUS_UNSAT ->
             Sat{ free = nb_var - !fixed_bits; total = nb_var }
        in
-       fbf_loop (Context.check ~param negative)
+       print 3 "@,@[Checking context_false]";
+       let status = Context.check ~param negative in
+       print 3 "@,@[Updated context_false]";
+       fbf_loop status
   in
   match answer with
   | Unsat -> Format.(fprintf stdout) "unsat";
