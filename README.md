@@ -21,17 +21,26 @@ A description of the solver can be found on the SMT-comp website:
 
 #### Installing dependencies with opam (needs 2.0 or higher, needs gmp)
 
-Besides Yices and its dependencies, the bindings need some OCaml dependencies. In the directory of this `README.md`, install (in findlib) the OCaml dependencies with the following command:
+Besides Yices and its dependencies, YicesQS needs some OCaml dependencies and the Yices2 bindings. These can all be installed by the following commands. 
+
+First, run:
 
 ```
-opam install . --deps-only
+opam pin yices2_bindings https://github.com/SRI-CSL/yices2_ocaml_bindings/archive/refs/heads/yices-2.6.3.zip
 ```
+Note that this URL is the correct version of the Yices2 bindings that YicesQS requires. Opam may have a `yices2_bindings` package, but it's probably outdated.
 This expects the yices library (and the libraries it depends on) to be present in the relevant paths (like `/usr/local/lib`). If for some reason these libraries are not in the usual paths, you can specify their paths by setting 
 the environment variables `LDFLAGS` (for the yices library) and `LD_LIBRARY_PATH` (for its dependencies, like libpoly or cudd), e.g.:
 
 ```
 export LD_LIBRARY_PATH=[UNCONVENTIONAL_PATHS]:/usr/local/lib
 export LDFLAGS="-L[UNCONVENTIONAL_PATH]"
+```
+
+Then, in the directory of this `README.md`, install (in findlib) the remaining OCaml dependencies with the following command:
+
+```
+opam install . --deps-only
 ```
 
 #### Installing dependencies with opam

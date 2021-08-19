@@ -1,0 +1,20 @@
+opam-version: "2.0"
+name: "yicesQS"
+version: "0.1"
+synopsis: "Yices-QS, an extension of Yices for quantified satisfiability"
+description: "Yices-QS, an extension of Yices for quantified satisfiability"
+maintainer: "Stephane Graham-Lengrand <stephane.graham-lengrand@csl.sri.com>"
+authors: "Stephane Graham-Lengrand <stephane.graham-lengrand@csl.sri.com>"
+license: "GPLv3"
+homepage: "https://github.com/disteph/yicesQS"
+bug-reports: "https://github.com/disteph/yicesQS/issues"
+depends: [
+  "ocaml" {>= "4.08"}
+  "dune" {build}
+  "ocamlfind" {build}
+  "containers"  {>= "3.0.0"}
+  "yices2_bindings"
+]
+build: [
+  make
+]
