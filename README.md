@@ -45,7 +45,9 @@ opam install . --deps-only
 
 #### Installing dependencies with opam
 
-The OCaml (direct) dependencies are listed in `yicesQS.opam`. You can try to install them manually.
+The OCaml (direct) dependencies are listed in `yicesQS.opam`. You can try to install them manually. A good place to start is to look at installing the Yices2 bindings, in the yices-2.6.3 branch:
+
+[https://github.com/SRI-CSL/yices2\_ocaml\_bindings/tree/yices-2.6.3](https://github.com/SRI-CSL/yices2_ocaml_bindings/tree/yices-2.6.3)
 
 #### Building
 
