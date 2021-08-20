@@ -21,18 +21,15 @@ A description of the solver can be found on the SMT-comp website:
 
 #### Installing dependencies with opam (needs 2.0 or higher, needs gmp)
 
-Besides Yices and its dependencies, YicesQS needs some OCaml dependencies and the Yices2 bindings. These can all be installed by the following commands. 
+Besides Yices and its dependencies, YicesQS needs some OCaml dependencies and the Yices2 bindings. Assuming that the yices library (and the libraries it depends on) are present in the conventional directories (like `/usr/local/lib`), the OCaml libraries can all be installed by the following opam commands. 
+If for some reason this is not the case, follow the instructions for "Installing dependencies without opam".
 
-First, assuming that the yices library (and the libraries it depends on) are present in the conventional directories (like `/usr/local/lib`), run:
+First, run:
 
 ```
 opam pin yices2_bindings https://github.com/SRI-CSL/yices2_ocaml_bindings/archive/refs/heads/yices-2.6.3.zip
 ```
 Note that this URL is the correct version of the Yices2 bindings that YicesQS requires. Opam may have a `yices2_bindings` package, but it's probably outdated.
-
-If for some reason the yices library (or the libraries it depends on) are not present in the conventional directories, then you should build and install `yices2_bindings` from source as described on the bindings' webpage:
-
-[https://github.com/SRI-CSL/yices2\_ocaml\_bindings/tree/yices-2.6.3](https://github.com/SRI-CSL/yices2_ocaml_bindings/tree/yices-2.6.3)
 
 Then, in the directory of this `README.md`, install (in findlib) the remaining OCaml dependencies with the following command:
 
@@ -40,11 +37,14 @@ Then, in the directory of this `README.md`, install (in findlib) the remaining O
 opam install . --deps-only
 ```
 
-#### Installing dependencies without opam
+#### Installing dependencies without opam (or with the Yices library being located in an unconventional directory)
 
-The OCaml (direct) dependencies are listed in `yicesQS.opam`. You can try to install them manually. A good place to start is to look at installing the Yices2 bindings, in the yices-2.6.3 branch:
+You should start by installing the Yices2 bindings, in the yices-2.6.3 branch,
+following the instructions given there:
 
 [https://github.com/SRI-CSL/yices2\_ocaml\_bindings/tree/yices-2.6.3](https://github.com/SRI-CSL/yices2_ocaml_bindings/tree/yices-2.6.3)
+
+Then inspect `yicesQS.opam` to see if there are further OCaml dependencies listed there; if there are not installed (in findlib), install them with opam from source.
 
 #### Building
 
