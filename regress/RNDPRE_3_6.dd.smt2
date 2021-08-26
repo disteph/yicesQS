@@ -1,4 +1,0 @@
-(set-logic BV)
-(assert (exists ((?x1 (_ BitVec 32))) (forall ((?x2 (_ BitVec 32))) (exists ((?x3 (_ BitVec 32))) (and (and (and (bvsge (bvadd (bvmul (bvneg (_ bv54 32)) ?x1) (bvmul (_ bv62 32) ?x3)) (_ bv79 32)) (not (= (bvadd (bvadd (bvmul (bvneg (_ bv49 32)) ?x1) (bvmul (_ bv25 32) ?x2)) (bvmul (_ bv51 32) ?x3)) (_ bv12 32)))) (not (= (bvadd (bvadd (bvmul (_ bv58 32) ?x1) (bvmul (_ bv61 32) ?x2)) (bvmul (_ bv74 32) ?x3)) (bvneg (_ bv18 32))))) (or (and (bvsge (bvadd (bvmul (_ bv48 32) ?x1) (bvmul (bvneg (_ bv47 32)) ?x2)) (_ bv61 32)) (bvsge (bvadd (bvmul (bvneg (_ bv80 32)) ?x2) (bvmul (bvneg (_ bv66 32)) ?x3)) (_ bv25 32))) (and (bvsle (bvadd (bvmul (bvneg (_ bv63 32)) ?x2) (bvmul (bvneg (_ bv98 32)) ?x3)) (_ bv0 32)) (not (= (bvadd (bvmul (_ bv47 32) ?x2) ?x3) (_ bv72 32))))))))))
-(check-sat)
-(exit)

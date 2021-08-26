@@ -1,6 +1,0 @@
-(set-info :smt-lib-version 2.6)
-(set-logic QF_BV)
-(set-info :status sat)
-(assert (forall ((y (_ BitVec 16))) (exists ((x (_ BitVec 16))) (= (concat (bvnot x) y) (concat #b0000000000000000 y)))))
-(check-sat)
-(exit)

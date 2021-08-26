@@ -5,6 +5,17 @@
  (modes exe)
  (promote (until-clean) (into ".."))
  (preprocess (pps ppx_optcomp ppx_deriving.std))
+ (modules Main Solver Command_options)
+)
+
+(executable
+ (name testgen)
+ (libraries containers zarith yices2_bindings)
+ (flags (:standard -cclib -lyices))
+ (modes exe)
+ (promote (until-clean) (into ".."))
+ (preprocess (pps ppx_optcomp ppx_deriving.std))
+ (modules Testgen)
 )
 
 (env (dev (flags (:standard -warn-error -A))))
