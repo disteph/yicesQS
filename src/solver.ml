@@ -211,8 +211,8 @@ let treat filename =
   in
   let () =
     match answer with
-    | Unsat -> Format.(fprintf stdout) "unsat"
-    | Sat{free;total} -> Format.(fprintf stdout) "sat %d %d" free total
+    | Unsat -> Format.(fprintf stdout) "@,unsat"
+    | Sat{free;total} -> Format.(fprintf stdout) "@,sat %d %d" free total
   in
   Config.free config;
   Context.free positive;
