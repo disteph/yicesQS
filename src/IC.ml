@@ -53,7 +53,7 @@ let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) li
 
   let rec aux treated = function
     | [] -> []
-    | (bl,Some e_i) as monomial::to_treat when Term.fv x e_i ->
+    | (bl,Some e_i) as monomial::to_treat when Term.is_free ~var:x e_i ->
       let next = aux (monomial::treated) to_treat in
       let t'   = rebuild treated to_treat in
       begin match bl with
@@ -101,7 +101,7 @@ let getInverseConcat (x : Term.t) (t : Term.t) (concat : _ ExtTerm.block list) =
     | Block{ block = Slice _ as block; sign_ext; zero_ext } as b :: tail ->
       let width = ExtTerm.width b in
       print 6 "@[<2>getInverseConcat finds block of slice %a@]@," ExtTerm.pp b;
-      if ExtTerm.fv x b
+      if ExtTerm.is_free ~var:x b
       then
         begin
           print 6 "@[<2>%a appears in it@]@," Term.pp x;
@@ -999,7 +999,7 @@ let rec solve : type a. Term.t -> pred -> uneval: a ExtTerm.closed -> eval:Term.
           { body = y; conditions = Term.(phi ==> b)::conditions; epsilon }
       in
       let open Substs in
-      match subst.conditions, not(Term.fv x eval) with
+      match subst.conditions, not(Term.is_free ~var:x eval) with
       | [], true  -> (fun _ -> Substs.Eliminate subst.body) (* No epsilon, no occurrence! *)
       | [], false -> (function
           | Epsilon _   -> Substs.NotGreat(NonLinear [subst.body]) 
@@ -1034,7 +1034,7 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
     let rec recurs_call accu = function
       | []              -> treat_nl accu
       | (e_i, t')::tail ->
-        if Term.fv x t'
+        if Term.is_free ~var:x t'
         then recurs_call ((e_i, t')::accu) tail (* Non-linear case goes in accumulator *)
         else treat e_i t' ||> recurs_call accu tail
         (* Linear case treated immediately doesn't go further if it comes back with Eliminate *)
@@ -1076,7 +1076,7 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
       let a : a termstruct = match a with
         | Concat blocks ->
           let aux block =
-            if ExtTerm.fv x block then reduce_sign_ext block
+            if ExtTerm.is_free ~var:x block then reduce_sign_ext block
             else block
           in
           Concat(List.map aux blocks)
@@ -1098,10 +1098,10 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
         let return_concat x' = return_block x' |> fun x -> Concat [x] in
         let variants : a closed Monad.variant LazyList.t = lazy(
           match e_i with
-          | T _      when fv x e_i -> let x' = fresh_var e_i in variant x' (T x')
-          | Slice _  when fv x e_i -> let x' = fresh_var e_i in variant x' (return_slice x')
-          | Block _  when fv x e_i -> let x' = fresh_var e_i in variant x' (return_block x')
-          | Concat _ when fv x e_i -> let x' = fresh_var e_i in variant x' (return_concat x')
+          | T _      when is_free ~var:x e_i -> let x' = fresh_var e_i in variant x' (T x')
+          | Slice _  when is_free ~var:x e_i -> let x' = fresh_var e_i in variant x' (return_slice x')
+          | Block _  when is_free ~var:x e_i -> let x' = fresh_var e_i in variant x' (return_block x')
+          | Concat _ when is_free ~var:x e_i -> let x' = fresh_var e_i in variant x' (return_concat x')
           | Bits _
           | T _ | Slice _ | Block _ | Concat _ -> `Nil
         )
@@ -1146,14 +1146,14 @@ let solve_atom
     Term.pp t;
   match cons with
   | `YICES_EQ_TERM | `YICES_ARITH_GE_ATOM | `YICES_BV_GE_ATOM | `YICES_BV_SGE_ATOM as cons ->
-    if Term.fv x t
-    then if Term.fv x e
+    if Term.is_free ~var:x t
+    then if Term.is_free ~var:x e
       then match cons with
         | `YICES_EQ_TERM when Term.is_bitvector t || Term.is_arithmetic t ->
           print 6 "@[<2>Present on both sides, and is bv or arith@]@,";
           let uneval, eval =
             if Term.is_bitvector t
-            then Term.BV.bvsub t e, Term.BV.bvconst_zero ~width:(Term.width t)
+            then Term.BV.bvsub t e, Term.BV.bvconst_zero ~width:(Term.width_of_term t)
             else Term.Arith.sub t e, Term.Arith.zero()
           in
           solve x `YICES_EQ_TERM ~uneval:(ExtTerm.T uneval) ~eval ~uneval_left:true ~polarity
@@ -1183,7 +1183,7 @@ let solve_lit x lit substs =
       Substs.Eliminate body
     else
       match reveal t with
-      | Term(A2 _ as atom) when fv x t ->
+      | Term(A2 _ as atom) when is_free ~var:x t ->
         print 5 "@[<v2>solve_lit looks at@,%a@," Term.pp lit;
         let r = solve_atom x atom b substs in
         print 5 "@[<2>which turns into %a@]@]@," (Substs.pp_substs x) r;
@@ -1226,9 +1226,9 @@ module CLL = CLazyList.Make(struct include Int let zero = 0 end)
  *           Term.subst_terms [x,body] old_conditions)
  * 
  *       | NotGreat(Epsilon _ )
- *         when List.exists (Term.fv x) treated
- *           || List.exists (Term.fv x) tail
- *           || List.exists (Term.fv x) old_conditions  ->
+ *         when List.exists (Term.is_free ~var:x) treated
+ *           || List.exists (Term.is_free ~var:x) tail
+ *           || List.exists (Term.is_free ~var:x) old_conditions  ->
  *         aux (lit::treated) accu tail
  * 
  *       | NotGreat substs ->
@@ -1277,9 +1277,9 @@ let solve_list conjuncts old_conditions x : Term.t list * Term.t list =
         Term.subst_terms [x,body] conjuncts, Term.subst_terms [x,body] old_conditions
 
       | NotGreat(Epsilon _ )
-        when List.exists (Term.fv x) treated
-          || List.exists (Term.fv x) tail
-          || List.exists (Term.fv x) old_conditions  ->
+        when List.exists (Term.is_free ~var:x) treated
+          || List.exists (Term.is_free ~var:x) tail
+          || List.exists (Term.is_free ~var:x) old_conditions  ->
         aux (lit::treated) accu tail (* Same accu as before looking at lit; i.e. we ignore the lit *)
 
       | NotGreat subst ->
