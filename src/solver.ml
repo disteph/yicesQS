@@ -33,7 +33,7 @@ module DblCtx = struct
     Config.set cfg_cdclT ~name:"mode" ~value:"multi-checks";
     Config.set cfg_mcsat ~name:"mode" ~value:"multi-checks";
     (* Config.set cfg_mcsat ~name:"mode" ~value:"push-pop"; *)
-    (* Config.set cfg_mcsat ~name:"model-interpolation" ~value:"true"; *)
+    Config.set cfg_mcsat ~name:"model-interpolation" ~value:"true";
     let r = { cdclT = Context.malloc ~config:cfg_cdclT ();
               cdclT_purify = ref [];
               mcsat = Context.malloc ~config:cfg_mcsat (); }
@@ -86,24 +86,22 @@ module DblCtx = struct
               aux (mcsat_formula::assumptions, accu) tail
          in
          let assumptions, mcsat_purify = aux ([],[]) implicant in
-         Context.push t.mcsat;
-
-         Context.assert_formulas t.mcsat assumptions;
 
          Timer.transfer timer_other timer_in_mcsat;
-         print "check" 1 "@,@[MCSAT check %a@]" Context.pp t.mcsat;
-         let status = Context.check t.mcsat in
+         print "check" 1 "@,@[MCSAT check %a@]" (List.pp Term.pp) assumptions;
+         let status = Context.check_with_assumptions t.mcsat assumptions in
          Timer.transfer timer_in_mcsat timer_other;
 
          match status with
          | `STATUS_SAT   ->
             let model_mcsat = Context.get_model t.mcsat in
             `STATUS_SAT, Some model_mcsat
+
          | `STATUS_UNSAT ->
             let core = Context.get_unsat_core t.mcsat |> Term.subst_terms mcsat_purify in
             assert_formula t Term.(not1(andN core));
-            Context.pop t.mcsat;
             check ?param t
+
          | _ -> High.ExceptionsErrorHandling.raise_bindings_error
              (Format.sprintf "MCSAT %a, with report %a"
                 Types.pp_smt_status status
