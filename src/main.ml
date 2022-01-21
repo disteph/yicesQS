@@ -27,33 +27,36 @@ open Arg
 let args = ref []
 let description = "QE in Yices"
 
-let options = Tracing.options;;
+let options = ("-e", String(fun f -> Solver.epsilon := Some f), "ask mcsat to look close to CDCLT model")::Tracing.options;;
 
 Arg.parse options (fun a->args := a::!args) description;;
 
 match !args with
 | [filename] ->
+
    Tracing.compile();
-  (try
-     Format.(fprintf stdout) "@[<v>";
-     let () = treat filename in
-     Format.(fprintf stdout) "@]%!";
-   with
+   begin
 
-   | Yices_SMT2_exception s as exc ->
-     Format.(fprintf stdout) "@[SMT2 error: %s@]@," s;
-     Format.(fprintf stdout) "Backtrace is:@,@[%s@]@]%!" (Printexc.get_backtrace());
-     raise exc
+     try
+       Format.(fprintf stdout) "@[<v>";
+       let () = treat filename in
+       Format.(fprintf stdout) "@]%!";
+     with
 
-   | ExceptionsErrorHandling.YicesException(_,report) as exc ->
-      let bcktrace = Printexc.get_backtrace() in
-      Format.(fprintf stdout) "@[Yices error: @[%s@]@]@," (ErrorPrint.string());
-      Format.(fprintf stdout) "@[Error report:@,@[<v2>  %a@]@,"
-        Types.pp_error_report report;
-      Format.(fprintf stdout) "@[Backtrace is:@,@[%s@]@]@]%!" bcktrace;
-      raise exc
+     | Yices_SMT2_exception s as exc ->
+        Format.(fprintf stdout) "@[SMT2 error: %s@]@," s;
+        Format.(fprintf stdout) "Backtrace is:@,@[%s@]@]%!" (Printexc.get_backtrace());
+        raise exc
 
-  )
+     | ExceptionsErrorHandling.YicesException(_,report) as exc ->
+        let bcktrace = Printexc.get_backtrace() in
+        Format.(fprintf stdout) "@[Yices error: @[%s@]@]@," (ErrorPrint.string());
+        Format.(fprintf stdout) "@[Error report:@,@[<v2>  %a@]@,"
+          Types.pp_error_report report;
+        Format.(fprintf stdout) "@[Backtrace is:@,@[%s@]@]@]%!" bcktrace;
+        raise exc
+
+   end
 | [] -> failwith "Too few arguments in the command"
 | _ -> failwith "Too many arguments in the command";;
 
