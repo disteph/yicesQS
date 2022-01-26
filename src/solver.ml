@@ -276,9 +276,9 @@ module DblCtx = struct
                    final_check assertions
 
                 | _ -> High.ExceptionsErrorHandling.raise_bindings_error
-                         (Format.sprintf "CDCLT/inner %a, with report %a"
-                            Types.pp_smt_status status
-                            Types.pp_error_report (High.Error.report()))
+                         "CDCLT/inner %a, with report %a"
+                         Types.pp_smt_status status
+                         Types.pp_error_report (High.Error.report())
               end
 
            | `STATUS_UNSAT ->
@@ -294,16 +294,16 @@ module DblCtx = struct
               check ?param t
 
            | _ -> High.ExceptionsErrorHandling.raise_bindings_error
-                    (Format.sprintf "MCSAT %a, with report %a"
-                       Types.pp_smt_status status
-                       Types.pp_error_report (High.Error.report()))
+                    "MCSAT %a, with report %a"
+                    Types.pp_smt_status status
+                    Types.pp_error_report (High.Error.report())
          in
          search_model()
        end
     | _ -> High.ExceptionsErrorHandling.raise_bindings_error
-             (Format.sprintf "CDCL(T) %a, with report %a"
-                Types.pp_smt_status status
-                Types.pp_error_report (High.Error.report()))
+             "CDCL(T) %a, with report %a"
+             Types.pp_smt_status status
+             Types.pp_error_report (High.Error.report())
 
 end
 
