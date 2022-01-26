@@ -151,7 +151,7 @@ module Game = struct
     | Term(A0(_, c)), _ when not(Term.equal var c) -> c
     | Term(Astar(`YICES_OR_TERM, l)), _ ->
        let aux (l_with, l_without) disjunct =
-         if Term.fv var disjunct
+         if Term.is_free ~var:var disjunct
          then (disjunct::l_with, l_without)
          else (l_with, disjunct::l_without)
        in
