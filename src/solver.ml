@@ -9,13 +9,6 @@ open Yices2.SMT2
 
 open Command_options
 
-(* let ppl ~prompt pl fmt l = match l with
- *   | [] -> ()
- *   | _::_ -> Format.fprintf fmt "@,@[<v 2>%s %i formula(e)@,%a@]"
- *               prompt
- *               (List.length l)
- *               (List.pp pl) l *)
-
 let pp_space fmt () = Format.fprintf fmt " @,"
 
 type subst = (Term.t * Term.t) list
@@ -186,10 +179,10 @@ module Game = struct
             let universal   = Term.(selector === SubGame.ground) in
             fun state ->
               print 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
-              let newvars = List.append SubGame.top_level.newvars (name::selector::state.newvars) in
-              let foralls = List.append SubGame.top_level.foralls (newforall::state.foralls) in
-              let existentials = List.append SubGame.existentials (existential::state.existentials) in
-              let universals   = List.append SubGame.universals   (universal::state.universals) in
+              let newvars = SubGame.top_level.newvars @ (name::selector::state.newvars) in
+              let foralls = SubGame.top_level.foralls @ (newforall::state.foralls) in
+              let existentials = SubGame.existentials @ (existential::state.existentials) in
+              let universals   = SubGame.universals   @ (universal::state.universals) in
               name, { newvars; foralls; existentials; universals }
           end
       | Bindings { c = `YICES_LAMBDA_TERM; _ } -> raise(CannotTreat t)
@@ -248,11 +241,6 @@ module SolverState = struct
     let option = List[Atom "set-option"; Atom ":produce-unsat-model-interpolants"; Atom "true"] in
     Format.fprintf fmt "@[<v>%a@]" (List.pp ~pp_sep:pp_space pp_sexp) (option::sl::log)
 
-  (* let pp_log fmt ((module T:T) as state) =
-   *   let open T in
-   *   let log = Context.to_sexp context in
-   *   pp_log_raw fmt (state,log) *)
-    
   let create ~logic config (module G : Game.T) =
     (module struct
        include G
@@ -303,26 +291,6 @@ module Support = struct
     | Empty -> []
     | S{ trigger; variables } -> trigger::variables
 end
-
-(* Supported models *)
-module SModel = struct
-
-  type t = {
-    support : Term.t list;
-    model   : Model.t
-  }
-
-  let pp fmt {support;model} =
-    let aux fmt u =
-      let v = Model.get_value_as_term model u in
-      Format.fprintf fmt "@[%a := %a@]" Term.pp u Term.pp v
-    in
-    match support with
-    | [] -> Format.fprintf fmt "[]"
-    | support -> Format.fprintf fmt "@[<v>%a@]" (List.pp ~pp_sep:pp_space aux) support
-
-end
-
 
 (* Output for the next function.
    When calling 
@@ -376,8 +344,9 @@ let generalize_model model formula_orig oldvar newvar : (Term.t * Term.t list) C
   print 3 "@[<v2>Formula sent to IC is %a@]@," Term.pp formula_orig;
   print 3 "@[<v2>Formula returned by IC is %a@]@," Term.pp formula;
 
-  (* Then we build a table: for each value that the variables to eliminate take in the model,
-  what are the rigid variables that have that value? *)
+  (* Then we build a table:
+     for each value that the variables to eliminate take in the model,
+     what are the rigid variables that have that value? *)
   let tbl = build_table model oldvar newvar in
 
   let open CLL in
@@ -463,7 +432,7 @@ let rec solve state level model support : answer =
     let open S in
     print 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
       Level.pp level
-      SModel.pp { model; support = Support.list support };
+      (SModel.pp()) { model; support = Support.list support };
 
     print 4 "@[Trying to solve over-approximations@]@,";
     let status =
@@ -491,7 +460,8 @@ let rec solve state level model support : answer =
     | `STATUS_SAT ->
       let model = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
-        SModel.pp SModel.{support = List.append level.newvars (Support.list support); model };
+        (SModel.pp())
+        SModel.{support = List.append level.newvars (Support.list support); model };
       post_process state level model support
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
@@ -636,7 +606,7 @@ and treat_sat state level model support =
               List.sorted_merge_uniq ~cmp:Term.compare var_that_matter cumulated_support
             in
             print 4 "@[Now checking whether our model %a violates anything we have learnt@]@,"
-              SModel.pp { model; support = cumulated_support };
+              (SModel.pp ()) { model; support = cumulated_support };
             match Context.check_with_model context model cumulated_support with
             | `STATUS_SAT  ->
               Context.get_model context ~keep_subst:true |> next cumulated_support

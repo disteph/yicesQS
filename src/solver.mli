@@ -106,16 +106,6 @@ module Support : sig
   val list : t -> Term.t list
 end
 
-(* Supported models *)
-module SModel : sig
-
-  type t = { support : Term.t list;
-             model   : Model.t }
-
-  val pp : t Format.printer
-end
-
-
 (* Output for the next function.
    When calling 
      solve game base_support model
