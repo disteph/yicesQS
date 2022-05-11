@@ -11,10 +11,12 @@ end
 open MTerm(OptionMonad)
 
 
-   
+(* Build 10...0 of length width *)   
 let mins ~width = true :: List.init (width - 1) (fun _ -> false)
                   |> List.rev
                   |> Term.BV.bvconst_from_list
+
+(* Build 01...1 of length width *)   
 let maxs ~width = false :: List.init (width - 1) (fun _ -> true)
                   |> List.rev
                   |> Term.BV.bvconst_from_list
@@ -22,6 +24,8 @@ let maxs ~width = false :: List.init (width - 1) (fun _ -> true)
 
 (****************************************************************)
 (* Conditional inverses as in the Niemetz et al. CAV'2018 paper *)
+(* References are to the long version at                        *)
+(* https://arxiv.org/pdf/1804.05025.pdf                         *)
 (****************************************************************)
 
 
@@ -30,16 +34,30 @@ let maxs ~width = false :: List.init (width - 1) (fun _ -> true)
 (*********************)
 
 
+(* Whether bv constant (list of bools) is -1 *)
+let is_minus_one = function
+  | true::tail when List.for_all (fun b -> b) tail -> true
+  | _ -> false
 
-(* Solves (P[x] = t) in x, for bv-polynomial P expressed as list l,
+(* Whether bv constant (list of bools) is 1 *)
+let is_one = function
+  | true::tail when List.for_all (fun b -> not b) tail -> true
+  | _ -> false
+
+(* Solves (P[x] = t) in x, for bv-polynomial P expressed as list l of monomials,
    inspired by Table 4 of CAV'2018.
    It produces a list of pairs (e_i, t_i) such that
    * x is free in e_i
    * e_i is either a monomial variable of P, or a monomial (cst*e_i') of P with cst not 1 or -1)
    * (e_i = t_i) is equivalent to (P[x] = t) *)
 
-let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) list) =
+let getInversePoly
+      (x : Term.t)
+      (t : Term.t)
+      (l : (bool list * Term.t option) list) (* Monomials: bool list is the constant *)
+    : (ExtTerm.t * Term.t) list =
 
+  (* Computes (t - \BigSum (treated @ to_treat)), the right-hand side t_i *)
   let rebuild treated to_treat =
     let l = List.rev_append treated to_treat in
     match l with
@@ -47,26 +65,29 @@ let getInversePoly (x : Term.t) (t : Term.t) (l : (bool list * Term.t option) li
     | _ -> Term.BV.(bvsub t (Term.build(Types.BV_Sum l)))
   in
 
-  (* First, we collect the coefficient of x in P (1 or -1),
-     together with the rest of the polynomial when we have removed x's monomial.
-     We fold the following function over the polynomial expressed as l. *)
+  (* We produce a pair (e_i, t_i) for every monomial in P that features x.
+     We fold the following function over the polynomial P expressed as list l of monomials.*)
 
   let rec aux treated = function
     | [] -> []
-    | (bl,Some e_i) as monomial::to_treat when Term.is_free ~var:x e_i ->
-      let next = aux (monomial::treated) to_treat in
-      let t'   = rebuild treated to_treat in
-      begin match bl with
-        | true::tail when List.for_all (fun b -> b) tail ->  (* coeff is -1 *)
-          (ExtTerm.(ExtTerm(T e_i)), Term.BV.bvneg t') :: next
-        | true::tail when List.for_all (fun b -> not b) tail -> (* coeff is 1 *)
-          (ExtTerm.(ExtTerm(T e_i)), t') :: next
-        | _ ->
-          let coeff = Term.BV.bvconst_from_list bl in
-          let monom_term = Term.BV.bvproduct [coeff; e_i] in 
-          (ExtTerm.(ExtTerm(T monom_term)), t')::next
-      end
-    | monomial ::to_treat -> aux (monomial::treated) to_treat
+    | (bl, Some e_i) as monomial::to_treat when Term.is_free ~var:x e_i ->
+       (* x appears in the monomial *)
+       (* We do the recursive call  *)
+       let next = aux (monomial::treated) to_treat in
+       (* Everything else than the monomial goes to the RHS *)
+       let t_i  = rebuild treated to_treat in
+       if is_minus_one bl     (* We output the pair (e_i, -t_i) *)
+       then (ExtTerm.(ExtTerm(T e_i)), Term.BV.bvneg t_i) :: next
+       else
+         if is_one bl         (* We output the pair (e_i, t_i) *)
+         then (ExtTerm.(ExtTerm(T e_i)), t_i) :: next
+         else (* We output the pair (monomial, t_i) *)
+           let coeff      = Term.BV.bvconst_from_list bl in
+           let monom_term = Term.BV.bvproduct [coeff; e_i] in 
+           (ExtTerm.(ExtTerm(T monom_term)), t_i) :: next
+
+    | monomial ::to_treat -> (* x doesn't appear in the monomial: we accumulate *)
+       aux (monomial::treated) to_treat
 
   in
   aux [] l
@@ -89,7 +110,8 @@ let reduce_sign_ext (ExtTerm.Block{ block; sign_ext; zero_ext } as b) =
    * e_i is not a BV_ARRAY, and in particular not an extract
    * (e_i = t_i) is implied by concat(...,e_i,...) = t *)
 
-let getInverseConcat (x : Term.t) (t : Term.t) (concat : _ ExtTerm.block list) =
+let getInverseConcat (x : Term.t) (t : Term.t) (concat : _ ExtTerm.block list)
+    : (ExtTerm.t * Term.t) list =
   let open ExtTerm in
   let rec aux start_index = function
     | [] -> [] (* x did not appear in a nice place *)
@@ -958,8 +980,18 @@ let make_lit (cons : pred) ~uneval ~eval ~uneval_left ~polarity =
   let atom = Term.build Types.(A2(cons,lhs,rhs)) in
   if polarity then atom else Term.not1 atom
 
-let rec solve : type a. Term.t -> pred -> uneval: a ExtTerm.closed -> eval:Term.t ->
-  uneval_left:bool -> polarity:bool -> Term.t list -> bool -> Substs.not_great -> Substs.substs =
+let rec solve :
+          type a.
+               Term.t ->
+               pred ->
+               uneval: a ExtTerm.closed ->
+               eval:Term.t ->
+               uneval_left:bool ->
+               polarity:bool ->
+               Term.t list ->
+               bool ->
+               Substs.not_great ->
+               Substs.substs =
   fun
     (x : Term.t)               (* The variable to be eliminated *)
     (cons : pred)              (* The atom's predicate symbol *)
@@ -1145,30 +1177,36 @@ let solve_atom
     Term.pp e
     Term.pp t;
   match cons with
-  | `YICES_EQ_TERM | `YICES_ARITH_GE_ATOM | `YICES_BV_GE_ATOM | `YICES_BV_SGE_ATOM as cons ->
-    if Term.is_free ~var:x t
-    then if Term.is_free ~var:x e
-      then match cons with
-        | `YICES_EQ_TERM when Term.is_bitvector t || Term.is_arithmetic t ->
-          print 6 "@[<2>Present on both sides, and is bv or arith@]@,";
-          let uneval, eval =
-            if Term.is_bitvector t
-            then Term.BV.bvsub t e, Term.BV.bvconst_zero ~width:(Term.width_of_term t)
-            else Term.Arith.sub t e, Term.Arith.zero()
-          in
-          solve x `YICES_EQ_TERM ~uneval:(ExtTerm.T uneval) ~eval ~uneval_left:true ~polarity
-            [] false
-        | _ ->
-          print 6 "@[<2>Present on both sides, and is not bv or arith@]@,";
-          solve x cons ~uneval:(ExtTerm.T e) ~eval:t ~uneval_left:true ~polarity [] false
-          ||>
-          solve x cons ~uneval:(ExtTerm.T t) ~eval:e ~uneval_left:false ~polarity [] false
-      else
-        (print 6 "@[<2>Present on rhs only@]@,";
-         solve x cons ~uneval:(ExtTerm.T t) ~eval:e ~uneval_left:false ~polarity [] false)
-    else
-      (print 6 "@[<2>Present on lhs only@]@,";
-       solve x cons ~uneval:(ExtTerm.T e) ~eval:t ~uneval_left:true ~polarity [] false)
+  | `YICES_EQ_TERM | `YICES_ARITH_GE_ATOM | `YICES_BV_GE_ATOM | `YICES_BV_SGE_ATOM as cons
+    ->
+     if Term.is_free ~var:x t
+     then
+       if Term.is_free ~var:x e
+       then
+         match cons with
+         | `YICES_EQ_TERM when Term.is_bitvector t || Term.is_arithmetic t ->
+            print 6 "@[<2>Present on both sides, and is bv or arith@]@,";
+            let uneval, eval =
+              if Term.is_bitvector t
+              then Term.BV.bvsub t e, Term.BV.bvconst_zero ~width:(Term.width_of_term t)
+              else Term.Arith.sub t e, Term.Arith.zero()
+            in
+            solve x `YICES_EQ_TERM
+              ~uneval:(ExtTerm.T uneval) ~eval ~uneval_left:true ~polarity
+              [] false
+         | _ ->
+            print 6 "@[<2>Present on both sides, and is not bv or arith@]@,";
+            solve x cons ~uneval:(ExtTerm.T e) ~eval:t ~uneval_left:true ~polarity
+              [] false
+            ||>
+              solve x cons ~uneval:(ExtTerm.T t) ~eval:e ~uneval_left:false ~polarity
+                [] false
+       else
+         (print 6 "@[<2>Present on rhs only@]@,";
+          solve x cons ~uneval:(ExtTerm.T t) ~eval:e ~uneval_left:false ~polarity [] false)
+     else
+       (print 6 "@[<2>Present on lhs only@]@,";
+        solve x cons ~uneval:(ExtTerm.T e) ~eval:t ~uneval_left:true ~polarity [] false)
   | _ ->
      Format.(fprintf stdout) "wrong predicate in solve_atom: %a" Term.pp (Term.build atom);
      assert false
@@ -1267,13 +1305,6 @@ let solve_list conjuncts old_conditions x : Term.t list * Term.t list =
 
       | Eliminate body ->
         print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
-        (* let aux conjunct =
-         *   let new_conjunct = Term.subst_term [x,body] conjunct in
-         *   if not (Term.equal conjunct new_conjunct)
-         *   then
-         *     print 5 "@[<2>Turning conjunct %a into %a@]@," Term.pp conjunct Term.pp new_conjunct
-         * in
-         * List.iter aux conjuncts; *)
         Term.subst_terms [x,body] conjuncts, Term.subst_terms [x,body] old_conditions
 
       | NotGreat(Epsilon _ )
