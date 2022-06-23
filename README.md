@@ -27,7 +27,7 @@ If for some reason this is not the case, follow the instructions for "Installing
 First, run:
 
 ```
-opam pin yices2_bindings https://github.com/SRI-CSL/yices2_ocaml_bindings/archive/refs/heads/yices-2.6.3.zip
+opam pin yices2_bindings https://github.com/SRI-CSL/yices2_ocaml_bindings/archive/refs/heads/yices-2.6.4.zip
 ```
 Note that this URL is the correct version of the Yices2 bindings that YicesQS requires. Opam may have a `yices2_bindings` package, but it's probably outdated.
 
