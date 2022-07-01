@@ -1,6 +1,7 @@
 [%%import "debug.mlh"]
 
 open Containers
+
 open Sexplib
 open Type
 open Yices2.High
@@ -8,275 +9,7 @@ open Yices2.Ext_bindings
 open Yices2.SMT2
 
 open Command_options
-
-let pp_space fmt () = Format.fprintf fmt " @,"
-
-type subst = (Term.t * Term.t) list
-
-module HType = Hashtbl.Make(Type)
-module HTerm = Hashtbl.Make(Term)
-
-module Level = struct
-
-  type t = {
-    id : int;
-    ground  : Term.t;
-    rigid   : Term.t list; (* Eigenvariables that will systematically be set by ancestor games *)
-    newvars : Term.t list; (* Eigenvariables to be set by this game, disjoint from above *)
-    (* If uninterpreted constant u abstracts away formula (\forall x1...xn neg A), then *)
-    foralls : forall list; (* ... (\forall x1..x2 neg A) is turned into an adversarial
-                                    game g and (u,g) goes into that list;
-                                    these games are the children game of the current game *)
-  }
-  and forall = {
-      name : Term.t;
-      selector : Term.t;
-      selector_context : Context.t;
-      sublevel : t
-    }
-
-
-  let rec pp fmt {id; rigid; newvars; foralls; ground = _}
-    = Format.fprintf fmt "@[<v>\
-                          Level id: %i@,\
-                          %i ancestors' variables: @[<hov>%a@]@,\
-                          %i free variables: @[<hov>%a@]\
-                          %a@]"
-      id
-      (List.length rigid)
-      (List.pp ~pp_sep:pp_space Term.pp) rigid
-      (List.length newvars)
-      (List.pp ~pp_sep:pp_space Term.pp) newvars
-      pp_foralls foralls
-  and pp_forall fmt {name; selector = _; sublevel; selector_context = _} =
-    Format.fprintf fmt "@[<v 2>%a opens sub-level@,%a@]"
-      Term.pp name
-      pp sublevel
-  and pp_foralls fmt = function
-    | [] -> ()
-    | foralls -> Format.fprintf fmt "@,@[<v2>%i ∀-formula(e) / sub-level(s):@,%a@]"
-                   (List.length foralls) (List.pp ~pp_sep:pp_space pp_forall) foralls
-
-  let rec free level =
-    List.iter free_forall level.foralls
-  and free_forall {selector_context; sublevel; _} =
-    Context.free selector_context;
-    free sublevel
-    
-end
-
-module Game = struct
-
-  module type T = sig
-    val ground    : Term.t (* Ground abstraction of the game, as a quantifier-free formula *)
-    val existentials : Term.t list
-    val universals   : Term.t list
-    val top_level : Level.t
-  end
-
-  type t = (module T)
-  type game = t     
-
-  let pp fmt (module T:T) =
-    let open T in
-    Format.fprintf fmt "@[<v>\
-                        @[<2>Ground:@ %a@]@,\
-                        @[<2>Existentials:@ @[<v>%a@]@]@,\
-                        @[<v 2>Levels:@,%a@]\
-                        @]"
-      Term.pp ground
-      (List.pp ~pp_sep:pp_space Term.pp) existentials
-      Level.pp top_level
-
-  (* The encoding of a formula into a game is done with a state monad,
-     where the state is this *)
-
-  type state = {
-    newvars : Term.t list;
-    foralls : Level.forall list;
-    existentials : Term.t list;
-    universals   : Term.t list
-  }
-
-  (* The state monad *)
-
-  module StateMonad = struct
-    type 'a t = state -> 'a * state
-    let return a s = a,s
-    let bind a f s = let a,s = a s in f a s
-    let (let+) = bind 
-  end
-  open StateMonad
-
-  (* Monadic fold and map *)
-  module MList = MList(StateMonad)
-  include MTerm(StateMonad)
-
-  let var_add newvar a state =
-    let newvars = newvar::state.newvars in
-    a, { state with newvars }
-
-  let bound_counter = ref 1
-
-  let fresh_bound () : string =
-    let name = "y!"^string_of_int !bound_counter in
-    incr bound_counter;
-    name
-
-  let fresh rigid bound body : Term.t * Term.t list * Term.t list =
-    let aux (subst, rigid, newvars) v =
-      let typ = Term.type_of_term v in
-      let name = fresh_bound() in
-      let newvar = Term.new_uninterpreted ~name typ in
-      ((v,newvar)::subst), (newvar::rigid), (newvar::newvars)
-    in
-    let subst, rigid, newvars = List.fold_left aux ([], rigid, []) bound in
-    Term.subst_term subst body, rigid, newvars
-
-  exception CannotTreat of Term.t
-
-  let counter = ref 0
-
-  let foralls_rev = HTerm.create 10
-
-  (* rigidintro = rigid + intro *)
-  let rec process config ~rigidintro ~rigid ~intro body : game =
-
-    let rec aux t : Term.t StateMonad.t =
-      let Term a = Term.reveal t in
-      match a with
-      | Bindings { c = `YICES_FORALL_TERM;
-                   vars;
-                   body }
-        ->
-        if false
-        then
-          return(HTerm.find foralls_rev t) (* returns placeholder previously generated *)
-        else
-          begin
-            (* Creating a selector for the forall formula *)
-            incr counter;
-            let freshcount = string_of_int !counter in
-            let name  = "trig"^freshcount in
-            let selector = Term.new_uninterpreted ~name (Type.bool()) in
-            (* Creating a name for the forall formula *)
-            let name  = "name"^freshcount in
-            let name  = Term.new_uninterpreted ~name (Type.bool()) in
-            HTerm.add foralls_rev t name;
-            let substituted, rigidintro_sub, intro_sub = fresh rigidintro vars body in
-            let (module SubGame) =
-              process config
-                ~rigidintro:rigidintro_sub
-                ~rigid:rigidintro
-                ~intro:intro_sub
-                (Term.not1 substituted) in
-            let selector_context = Context.malloc ~config () in
-            Context.assert_formula selector_context selector;
-            let newforall =
-              Level.{ name; selector; selector_context; sublevel = SubGame.top_level }
-            in
-            let existential = Term.(name ||| SubGame.ground) in
-            let universal   = Term.(selector === SubGame.ground) in
-            fun state ->
-              print 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
-              let newvars = SubGame.top_level.newvars @ (name::selector::state.newvars) in
-              let foralls = SubGame.top_level.foralls @ (newforall::state.foralls) in
-              let existentials = SubGame.existentials @ (existential::state.existentials) in
-              let universals   = SubGame.universals   @ (universal::state.universals) in
-              name, { newvars; foralls; existentials; universals }
-          end
-      | Bindings { c = `YICES_LAMBDA_TERM; _ } -> raise(CannotTreat t)
-      | A0 _ -> return t
-      | _ ->
-        let+ x = map aux a in return(Term.build x)
-    in
-    print 5 "@[<v2>Traversing term@,%a@]@," Term.pp body;
-    let id = !counter in
-    let state = { newvars = intro; foralls = []; existentials = []; universals = []; } in
-    let ground, { newvars; foralls; existentials; universals } = aux body state in
-    let foralls = List.rev foralls in
-    (module struct
-      let top_level = Level.{id; ground = Term.(ground &&& andN existentials); rigid; newvars; foralls;}
-      let ground = ground
-      let existentials = existentials
-      let universals = universals
-    end)
-end
-
-module SolverState = struct
-
-  module type T = sig
-    include Game.T
-    val logic        : string
-    val context           : Context.t (* Main context for the solver *)
-[%%if debug_mode]
-    val epsilons_context  : Context.t (* context with only epsilon term constraints at level 0 *)
-[%%endif]
-    (* val learnt : Term.t list ref *)
-  end
-
-  type t = (module T)
-
-  let pp fmt (module T:T) =
-    Format.fprintf fmt "@[<v>\
-                        @[%a@]\
-                        @]"
-      Game.pp (module T)
-
-  let pp_log_raw fmt ((module T:T),log) =
-    let open T in
-    let intro sofar t =
-      let typ = Term.type_of_term t in
-      let sexp = List[Atom "declare-fun"; Term.to_sexp t; List[]; Type.to_sexp typ] in
-      sexp::sofar
-    in
-    let log = List.fold_left intro log top_level.newvars in
-    let log = List.fold_left intro log top_level.rigid in
-    let logic =
-      if String.length logic > 3 && String.equal (String.sub logic 0 3) "QF_"
-      then logic
-      else "QF_"^logic
-    in
-    let sl     = List[Atom "set-logic";  Atom logic] in
-    let option = List[Atom "set-option"; Atom ":produce-unsat-model-interpolants"; Atom "true"] in
-    Format.fprintf fmt "@[<v>%a@]" (List.pp ~pp_sep:pp_space pp_sexp) (option::sl::log)
-
-  let create ~logic config (module G : Game.T) =
-    (module struct
-       include G
-       let logic = logic
-[%%if debug_mode]
-       let epsilons_context = Context.malloc ~config ()
-[%%endif]
-       let context          = Context.malloc ~config ()
-       let () = Context.assert_formula context ground
-       let () = Context.assert_formulas context existentials
-       let () = Context.assert_formulas context universals
-                                        (* let learnt = ref [] *)
-     end : T)
-
-  [%%if debug_mode]
-  let epsilon_assert (module S : T) = Context.assert_formulas S.epsilons_context
-  [%%else]
-  let epsilon_assert _ _ = ()
-  [%%endif]
-
-  let learn (module S : T) lemmas =
-    (* learnt := List.append lemma !S.learnt; *)
-    print 4 "@[<2>Learning %a@]@," (List.pp Term.pp) lemmas;
-    Context.assert_formulas S.context lemmas
-
-  let record_epsilons ((module S : T) as state) epsilons =
-    print 3 "@[<v2>Recording epsilons @[<v2>  %a@]@]@,"
-      (List.pp Term.pp) epsilons;
-    epsilon_assert state epsilons;
-    learn state epsilons
-
-  let free (module G : T) =
-    Context.free G.context;
-    Level.free G.top_level
-  
-end
+open Utils
 
 module Support = struct
   
@@ -292,19 +25,6 @@ module Support = struct
     | S{ trigger; variables } -> trigger::variables
 end
 
-(* Output for the next function.
-   When calling 
-     solve game base_support model
-   base_support is the support of model,
-   and game may involve uninterpreted constants outside base_support
-   - If the call outputs Unsat f, it means:
-   here is a formula f whose uninterpreted constants are in base_support,
-   that is satisfied by model, and that is inconsistent with game.
-   - If the call outputs Sat l, it means:
-   each formula f in the list of formulae f has its uninterpreted constants in base_support,
-   is satisfied by model, and implies game.
-*)
-
 type answer =
   | Unsat of Term.t
   | Sat of Term.t list
@@ -314,78 +34,6 @@ exception BadInterpolant of SolverState.t * Level.t * Term.t
 exception BadUnder of SolverState.t * Level.t * Term.t
 exception FromYicesException of SolverState.t * Level.t * Types.error_report * string
 exception WrongAnswer of SolverState.t * answer
-
-module THash = Hashtbl.Make'(Term)
-    
-let build_table model oldvar newvar =
-  let tbl = THash.create (List.length newvar * 10) in
-  let treat_new var =
-    let value = Model.get_value_as_term model var in
-    match THash.find_opt tbl value with
-    | Some _ -> ()
-    | None   -> THash.add tbl value []
-  in
-  List.iter treat_new newvar;
-  let treat_old var =
-    let value = Model.get_value_as_term model var in
-    match THash.find_opt tbl value with
-    | Some l -> THash.replace tbl value (var::l)
-    | None   -> ()
-  in
-  List.iter treat_old oldvar;
-  tbl
-
-module CLL = CLazyList.Make(struct include Int let zero = 0 end)
-
-let generalize_model model formula_orig oldvar newvar : (Term.t * Term.t list) CLL.t =
-
-  (* First, we try to eliminate as many variables as we can by invertibility conditions *)
-  let formula, epsilons = IC.solve_all newvar formula_orig in
-  print 3 "@[<v2>Formula sent to IC is %a@]@," Term.pp formula_orig;
-  print 3 "@[<v2>Formula returned by IC is %a@]@," Term.pp formula;
-
-  (* Then we build a table:
-     for each value that the variables to eliminate take in the model,
-     what are the rigid variables that have that value? *)
-  let tbl = build_table model oldvar newvar in
-
-  let open CLL in
-  (* aux1 takes the list of variables t eliminate.
-     The output is a costed lazy list of substitutions. *)
-  let rec aux1 list : subst CLL.t = match list with
-    | []              -> CLL.return []
-    | var::other_vars -> (* var is a variable to eliminate *)
-      let value = Model.get_value_as_term model var in (* its value in the model *)
-      let terms = THash.find tbl value in (* list of rigid variables that have that value *)
-      print 3 "@[<v2>Trying to eliminate variable %a, with value %a and matching variables %a@]@,"
-        Term.pp var
-        Term.pp value
-        (List.pp Term.pp) terms;
-      (* We recursively compute the costed lazy list of substitutions for all other variables. *)
-      let@ subst = aux1 other_vars in
-      (* subst symbolically represents (any) one of these substitutions;
-         We need to extend it with a substitution for var.
-         We turn all of the rigid variables that have the same value as var
-         into a costed lazy list with no cost between elements. *)
-      let rec aux2 : Term.t list -> Term.t CLL.t = function
-        | []   -> LazyList.empty
-        | t::l -> lazy(`Cons((t,0), aux2 l))
-        (* | []             -> WLL.return value *)
-        (* | [t]            -> lazy(`Cons((t,100), WLL.return value)) *)
-        (* | t::(_::_ as l) -> lazy(`Cons((t,0), aux2 l)) *)
-      in
-      (* ...and we add as the head of the lazy list the value that var has, as a term.
-       Substituting var by that constant term will be done first,
-       with a cost of 100 to access the substitutions by rigid variables. *)
-      let@ t = lazy(`Cons((value,100), aux2 terms)) in
-      (* t represents any one of the terms susbtituting var
-         (the rigid variables with same value, the value itself as a term) *)
-      CLL.return((var,t)::subst)
-  in
-  let@ subst = aux1 newvar in
-  CLL.return(
-    Term.subst_term subst formula,
-    Term.subst_terms subst epsilons)
 
 [%%if debug_mode]
 
@@ -410,21 +58,6 @@ let check state level model support reason =
 let check _state _level _model _support _reason = ()
 
 [%%endif]
-
-let rec denum_elim model t =
-  match Term.reveal t with
-  | Term(A0 _) -> t
-  | Term(A2(`YICES_RDIV, num, denum)) ->
-     let num = denum_elim model num in
-     let denum = Model.get_value_as_term model denum |> Term.rational_const_value in
-     if Q.(equal denum zero) then raise Division_by_zero
-     else
-       let cst = denum
-                 |> Q.inv
-                 |> Term.Arith.mpq
-       in
-       Term.Arith.mul cst num
-  | Term b -> Term.(build(map (denum_elim model) b))
 
 let rec solve state level model support : answer =
   try
@@ -493,35 +126,31 @@ and treat_sat state level model support =
       print 4 "@[<2>true of model is@ @[<v>%a@]@]@," Term.pp true_of_model;
       (* Now compute several projections of the reason on the rigid variables *)
       let seq =
-         print 1 "@,Sent for generalization:@, %a@," Term.pp true_of_model;
-         (* print 0 "@,%a" (List.pp Term.pp) Level.(level.newvars); *)
-         if String.equal S.logic "NRA"
-         then
-           try
-             let true_of_model = denum_elim model true_of_model in
-             Model.generalize_model model true_of_model Level.(level.newvars) `YICES_GEN_BY_PROJ
-             |> Term.andN |> fun x -> CLL.return (x,[])
-           with _ ->
-             generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
-         else
-           generalize_model model true_of_model Level.(level.rigid) Level.(level.newvars)
+        print 1 "@,Sent for generalization:@, %a@," Term.pp true_of_model;
+        (* print 0 "@,%a" (List.pp Term.pp) Level.(level.newvars); *)
+        QF_API.generalize_model
+          ~logic:S.logic
+          model
+          ~true_of_model
+          ~rigid_vars:Level.(level.rigid)
+          ~newvars:   Level.(level.newvars)
       in
       let rec extract
                 (accu : Term.t list)
                 (epsilons : Term.t list)
                 (n:int)
-                (l : (Term.t * Term.t list) CLL.t) : Term.t list * Term.t list =
-        if n <= 0 then accu, epsilons
+                (l : Term.t WithEpsilons.t CLL.t) : Term.t list WithEpsilons.t =
+        if n <= 0 then { main = accu; epsilons }
         else
           match Lazy.force l with
-          | `Nil -> accu, epsilons
-          | `Cons(((head, epsilons_local), _), tail) -> 
+          | `Nil -> { main = accu; epsilons }
+          | `Cons(({ main = head; epsilons = epsilons_local }, _), tail) -> 
             match epsilons_local, epsilons with
             | [], epsilons
             | epsilons, [] -> extract (head::accu) epsilons (n-1) tail
             | _::_, _::_   -> extract accu epsilons (n-1) tail
       in
-      let underapprox, epsilons = extract [] [] !underapprox seq in
+      let WithEpsilons.{ main = underapprox; epsilons } = extract [] [] !underapprox seq in
       print 1 "@,After generalization@, %a@," (List.pp Term.pp) underapprox;
       SolverState.record_epsilons state epsilons;
       print 3 "@[<v2>Level %i model works, with %i reason(s)@,@[<v2>  %a@]@]@,"
@@ -668,7 +297,7 @@ let treat filename =
   let support    = ref [] in
   let expected   = ref None in
   let assertions = ref [] in
-  let states = ref [] in
+  let states     = ref [] in
   let treat sexp =
     match sexp with
     | List(Atom head::args) ->
@@ -703,11 +332,8 @@ let treat filename =
         | "check-sat", [], Some env ->
           let formula = Term.(andN !assertions) in
           print 2 "@[<v 2>@[Computing game@]@,";
-          let (module G) as game = Game.process session.config
-              ~rigidintro:!support
-              ~rigid:[]
-              ~intro:!support
-              formula
+          let (module G) as game =
+            Game.process session.config ~global_vars:!support formula
           in
           print 3 "@[<v 1>Computed game is:@,@[%a@]@]@," Game.pp game;
           print 2 "@]@,";

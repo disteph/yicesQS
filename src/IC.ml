@@ -1,7 +1,7 @@
-open Containers
+open! Containers
 open Yices2.High
 open Yices2.Ext_bindings
-open Command_options
+open Utils
 
 module OptionMonad = struct
   include Option
@@ -1232,8 +1232,6 @@ let solve_lit x lit substs =
   | Term(A1(`YICES_NOT_TERM, t')) -> aux false t'
   | _ -> aux true lit
 
-module CLL = CLazyList.Make(struct include Int let zero = 0 end)
-
 (* type accu
  * 
  * let solve_list conjuncts old_conditions x value : (Term.t list * Term.t list) CLL.t =
@@ -1346,4 +1344,4 @@ let solve_all vars t =
   in
   let conjuncts, conditions = aux conjuncts [] vars in
   print 3 "@[<2>IC finished@]@,";
-  Term.andN conjuncts, conditions
+  WithEpsilons.{ main = Term.andN conjuncts; epsilons = conditions }
