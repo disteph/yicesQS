@@ -32,6 +32,6 @@ exception BadUnder       of SolverState.t * Level.t * Term.t
 exception FromYicesException of SolverState.t * Level.t * Types.error_report * string
 exception WrongAnswer    of SolverState.t * answer
 
-(* val solve : SolverState.t -> Level.t -> Model.t -> Support.t -> answer *)
+(* val solve : SolverState.t -> Level.t -> Model.t -> Support.t -> answer*SolverState.t *)
 
 val treat : string -> SolverState.t list
