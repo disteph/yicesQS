@@ -392,7 +392,7 @@ let generalize_model model formula_orig oldvar newvar : (Term.t * Term.t list) C
 let check state level model support reason =
   let (module S:SolverState.T) = state in
   print 3 "@[<v2>Checking that our model %a@,satisfies reason %a@]@,"
-    SModel.pp { model; support }
+    (SModel.pp()) { model; support }
     Term.pp reason;
   Context.push S.epsilons_context;
   Context.assert_formula S.epsilons_context (Term.not1 reason);
@@ -426,7 +426,7 @@ let rec denum_elim model t =
        Term.Arith.mul cst num
   | Term b -> Term.(build(map (denum_elim model) b))
 
-let rec solve state level model support : answer =
+let rec solve state level model support : answer*SolverState.t =
   try
     let (module S:SolverState.T) = state in
     let open S in
@@ -438,8 +438,7 @@ let rec solve state level model support : answer =
     let status =
       match support with
       | Empty -> print 0 "."; Context.check context
-      | S _   ->
-                 print 0 "."; Context.check_with_model context model (Support.list support)
+      | S _   -> print 0 "."; Context.check_with_model context model (Support.list support)
     in
     match status with
 
@@ -455,7 +454,7 @@ let rec solve state level model support : answer =
       then raise (BadInterpolant(state, level, interpolant));
       let answer = Unsat Term.(not1 interpolant) in
       print 3 "@[<2>Level %i answer on that model is@ @[%a@]@]" level.id pp_answer answer;
-      answer
+      answer, state
 
     | `STATUS_SAT ->
       let model = Context.get_model context ~keep_subst:true in
@@ -463,6 +462,7 @@ let rec solve state level model support : answer =
         (SModel.pp())
         SModel.{support = List.append level.newvars (Support.list support); model };
       post_process state level model support
+
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
   with
@@ -474,7 +474,7 @@ and post_process state level model support =
   let result = treat_sat state level model support in
   print 1 "@]@,";
   match result with
-  | Some underapprox -> Sat underapprox
+  | Some underapprox -> Sat underapprox, state
   | None -> solve state level model support
 
 and treat_sat state level model support =
@@ -573,7 +573,7 @@ and treat_sat state level model support =
       (* elim_trigger eliminates the trigger variable from the explanations given by the
          recursive call *)
       let elim_trigger reason = Term.subst_term [o.selector,Term.true0()] reason in
-      match recurs_status with
+      match recurs_status |> fst with
       | Unsat reason ->
         begin
           print 1 "@,";
@@ -639,7 +639,7 @@ and treat_sat state level model support =
   aux model cumulated_support [] level.foralls
 
 [%%if debug_mode]
-let return answer expected =
+let return state answer expected =
   match answer, expected with
   | Unsat _, None -> "unsat?"
   | Sat _, None -> "sat?"
@@ -648,7 +648,7 @@ let return answer expected =
   | Unsat _, Some true 
     | Sat _, Some false -> raise (WrongAnswer(state, answer))
 [%%else]
-let return answer _expected =
+let return state answer _expected =
   match answer with
   | Unsat _ -> "unsat"
   | Sat _ -> "sat"
@@ -713,9 +713,9 @@ let treat filename =
           print 2 "@]@,";
           let state = SolverState.create ~logic:env.logic session.config game in
           print 1 "@[<v>";
-          let answer = solve state G.top_level (Model.from_map []) Support.Empty in
+          let answer, state = solve state G.top_level (Model.from_map []) Support.Empty in
           print 1 "@]@,";
-          let str = return answer !expected in
+          let str = return state answer !expected in
           Format.(fprintf stdout) "@[%s@]@," str;
           states := state::!states;
           (* SolverState.free initial_state; *)
