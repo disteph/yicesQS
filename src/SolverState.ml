@@ -49,12 +49,12 @@ let create ~logic config (module G : Game.T) =
     else "QF_"^logic
   in
   let logic = match logic with
-    | "NRA" -> `NRA
-    | "NIA" -> `NIA
-    | "LRA" -> `LRA
-    | "LIA" -> `LIA
-    | "BV"  -> `BV
-    | _     -> `Other 
+    | "NRA" | "QF_NRA" -> `NRA
+    | "NIA" | "QF_NIA" -> `NIA
+    | "LRA" | "QF_LRA" -> `LRA
+    | "LIA" | "QF_LIA" -> `LIA
+    | "BV"  | "QF_BV"  -> `BV
+    | _     -> print_endline("Unknown logic: "^logic); `BV 
   in
   (module struct
      include G
