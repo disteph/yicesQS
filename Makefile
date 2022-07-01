@@ -12,3 +12,6 @@ build:
 
 clean:
 	dune clean
+
+test: build
+	time find regress -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c "echo {} && ./main.exe {}"
