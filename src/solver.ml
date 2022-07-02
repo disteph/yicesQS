@@ -53,11 +53,21 @@ let check state level model support reason =
     Context.pop S.epsilons_context
   | _ -> assert false
 
+let check_interpolant state level model interpolant context =
+  if (Model.get_bool_value model interpolant)
+  then raise (BadInterpolant(state, level, interpolant));
+  if Term.(equal interpolant (false0()))
+     && not(Types.equal_smt_status (Context.check context) `STATUS_UNSAT)
+  then raise (BadInterpolant(state, level, interpolant));
+
 [%%else]
 
 let check _state _level _model _support _reason = ()
 
+let check_interpolant _state _level _model _interpolant _context = ()
+
 [%%endif]
+
 
 let rec solve state level model support : answer*SolverState.t =
   try
@@ -80,11 +90,7 @@ let rec solve state level model support : answer*SolverState.t =
         | Empty -> Term.false0()
         | S _   -> Context.get_model_interpolant context
       in
-      if (Model.get_bool_value model interpolant)
-      then raise (BadInterpolant(state, level, interpolant));
-      if Term.(equal interpolant (false0()))
-      && not(Types.equal_smt_status (Context.check context) `STATUS_UNSAT)
-      then raise (BadInterpolant(state, level, interpolant));
+      check_interpolant state level model interpolant context;
       let answer = Unsat Term.(not1 interpolant) in
       print 3 "@[<2>Level %i answer on that model is@ @[%a@]@]" level.id pp_answer answer;
       answer, state
