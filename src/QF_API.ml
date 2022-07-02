@@ -22,7 +22,7 @@ let build_table model oldvar newvar =
   List.iter treat_old oldvar;
   tbl
 
-type subst = (Term.t * Term.t) list
+type subst = (Term.t * Term.t) list WithEpsilons.t
 
 let generalize_model model ~true_of_model ~rigid_vars ~newvars =
 
@@ -35,39 +35,54 @@ let generalize_model model ~true_of_model ~rigid_vars ~newvars =
   (* aux1 takes the list of variables t eliminate.
      The output is a costed lazy list of substitutions. *)
   let rec aux1 list : subst CLL.t = match list with
-    | []              -> CLL.return []
+    | []              -> [] |> WithEpsilons.return |> CLL.return
     | var::other_vars -> (* var is a variable to eliminate *)
       let value = Model.get_value_as_term model var in (* its value in the model *)
       let terms = HTerms.find tbl value in (* list of rigid variables that have that value *)
+      let value =
+        match Term.reveal value with
+        | Term App(f, [arg]) when Term.equal f (Model.epsilon_real()) ->
+           begin
+             let Term arg = Term.reveal arg in
+             match arg with
+             | Bindings{c = `YICES_LAMBDA_TERM; vars = [yvar]; body } ->
+                let main = Term.new_uninterpreted (Type.real()) in
+                let epsilon = Term.subst_term [yvar, var] body in
+                WithEpsilons.{ main; epsilons = [epsilon] }
+             | _ -> failwith "should not be"
+           end
+        | _ -> WithEpsilons.return value
+      in
       print 3 "@[<v2>Trying to eliminate variable %a, with value %a and matching variables %a@]@,"
         Term.pp var
-        Term.pp value
+        Term.pp value.main
         (List.pp Term.pp) terms;
       (* We recursively compute the costed lazy list of substitutions for all other variables. *)
-      let@ subst = aux1 other_vars in
+      let@ WithEpsilons.{ main = subst; epsilons = epsilons_rec } = aux1 other_vars in
       (* subst symbolically represents (any) one of these substitutions;
          We need to extend it with a substitution for var.
          We turn all of the rigid variables that have the same value as var
          into a costed lazy list with no cost between elements. *)
-      let rec aux2 : Term.t list -> Term.t CLL.t = function
+      let rec aux2 : Term.t list -> Term.t WithEpsilons.t CLL.t = function
         | []   -> LazyList.empty
-        | t::l -> lazy(`Cons((t,0), aux2 l))
-        (* | []             -> WLL.return value *)
-        (* | [t]            -> lazy(`Cons((t,100), WLL.return value)) *)
-        (* | t::(_::_ as l) -> lazy(`Cons((t,0), aux2 l)) *)
+        | t::l -> lazy(`Cons((WithEpsilons.return t,0), aux2 l))
+                      (* | []             -> WLL.return value *)
+                      (* | [t]            -> lazy(`Cons((t,100), WLL.return value)) *)
+                      (* | t::(_::_ as l) -> lazy(`Cons((t,0), aux2 l)) *)
       in
       (* ...and we add as the head of the lazy list the value that var has, as a term.
        Substituting var by that constant term will be done first,
        with a cost of 100 to access the substitutions by rigid variables. *)
-      let@ t = lazy(`Cons((value,100), aux2 terms)) in
+      let@ WithEpsilons.{ main = t; epsilons } = lazy(`Cons((value,100), aux2 terms)) in
       (* t represents any one of the terms susbtituting var
          (the rigid variables with same value, the value itself as a term) *)
-      CLL.return((var,t)::subst)
+      WithEpsilons.{ main= (var, t)::subst; epsilons = epsilons @ epsilons_rec }
+      |> CLL.return
   in
-  let@ subst = aux1 newvars in
+  let@ WithEpsilons.{ main = subst; epsilons } = aux1 newvars in
   CLL.return WithEpsilons.{
       main     = Term.subst_term subst true_of_model.main;
-      epsilons = Term.subst_terms subst true_of_model.epsilons
+      epsilons = epsilons @ Term.subst_terms subst true_of_model.epsilons
     }
 
 let rec denum_elim model t =
@@ -87,8 +102,8 @@ let generalize_model ~logic model ~true_of_model ~rigid_vars ~newvars
   match logic with
   | `NRA
   | `LRA
-  (* | `NIA *)
-  (* | `LIA *)
+  (* | `NIA
+   * | `LIA *)
     ->
      begin
        try

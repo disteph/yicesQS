@@ -3,9 +3,9 @@
 open Containers
 
 open Yices2.Ext_bindings
-open Command_options
        
 [%%if debug_mode]
+open Command_options
 let print i fs = Format.((if !verbosity >= i then fprintf else ifprintf) stdout) fs
 [%%else]
 let print _ fs = Format.(ifprintf stdout) fs

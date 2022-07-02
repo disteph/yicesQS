@@ -277,12 +277,11 @@ let return state answer expected =
   | Unsat _, Some true 
     | Sat _, Some false -> raise (WrongAnswer(state, answer))
 [%%else]
-let return state answer _expected =
+let return _state answer _expected =
   match answer with
   | Unsat _ -> "unsat"
   | Sat _ -> "sat"
 [%%endif]
-
 
   
 let treat filename =
