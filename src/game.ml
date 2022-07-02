@@ -32,25 +32,16 @@ type state = {
     newvars : Term.t list;
     foralls : Level.forall list;
     existentials : Term.t list;
-    universals   : Term.t list
+    universals   : Term.t list;
+    epsilons     : Term.t list
   }
 
 (* The state monad *)
-
-module StateMonad = struct
-  type 'a t = state -> 'a * state
-  let return a s = a,s
-  let bind a f s = let a,s = a s in f a s
-  let (let+) = bind 
-end
+module StateMonad = StateMonad(struct type t = state end)
 
 (* Monadic fold and map *)
 module MList = MList(StateMonad)
 include MTerm(StateMonad)
-
-(* let var_add newvar a state =
- *   let newvars = newvar::state.newvars in
- *   a, { state with newvars } *)
 
 let bound_counter = ref 1
 
@@ -76,7 +67,7 @@ let counter = ref 0
 let foralls_rev = HTerms.create 10
 
 (* rigidintro = rigid + intro *)
-let rec process config ~rigidintro ~rigid ~intro body : t =
+let rec process config ~logic ~rigidintro ~rigid ~intro body : t WithEpsilonsMonad.t =
   let open StateMonad in
 
   let rec aux t : Term.t StateMonad.t =
@@ -101,12 +92,16 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
            let name  = Term.new_uninterpreted ~name (Type.bool()) in
            HTerms.add foralls_rev t name;
            let substituted, rigidintro_sub, intro_sub = fresh rigidintro vars body in
-           let (module SubGame) =
+           fun state ->
+           let WithEpsilons.{ main = (module SubGame); epsilons } =
              process config
+               ~logic
                ~rigidintro:rigidintro_sub
                ~rigid:rigidintro
                ~intro:intro_sub
-               (Term.not1 substituted) in
+               (Term.not1 substituted)
+               state.epsilons
+           in
            let selector_context = Context.malloc ~config () in
            Context.assert_formula selector_context selector;
            let newforall =
@@ -114,13 +109,25 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
            in
            let existential = Term.(name ||| SubGame.ground) in
            let universal   = Term.(selector === SubGame.ground) in
-           fun state ->
            print 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
+
+           let WithEpsilons.{ main = projection; epsilons } =
+             let open WithEpsilons in
+             match logic with
+             | `BV ->
+                ListWithEpsilons.map
+                  (IC.weaken_existentials intro_sub)
+                  (SubGame.existentials @ SubGame.universals)
+                  epsilons
+             | _ -> return []
+           in
+           
            let newvars = SubGame.top_level.newvars @ (name::selector::state.newvars) in
            let foralls = SubGame.top_level.foralls @ (newforall::state.foralls) in
            let existentials = SubGame.existentials @ (existential::state.existentials) in
-           let universals   = SubGame.universals   @ (universal::state.universals) in
-           name, { newvars; foralls; existentials; universals }
+           let universals   =
+             projection @ SubGame.universals   @ (universal::state.universals) in
+           name, { newvars; foralls; existentials; universals; epsilons }
          end
     | Bindings { c = `YICES_LAMBDA_TERM; _ } -> raise(CannotTreat t)
     | A0 _ -> return t
@@ -129,15 +136,25 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
   in
   print 5 "@[<v2>Traversing term@,%a@]@," Term.pp body;
   let id = !counter in
-  let state = { newvars = intro; foralls = []; existentials = []; universals = []; } in
-  let ground, { newvars; foralls; existentials; universals } = aux body state in
+  fun epsilons ->
+  let state = { newvars = intro;
+                foralls = [];
+                existentials = [];
+                universals = [];
+                epsilons }
+  in
+  let ground, { newvars; foralls; existentials; universals; epsilons } = aux body state in
   let foralls = List.rev foralls in
-  (module struct
-     let top_level = Level.{id; ground = Term.(ground &&& andN existentials); rigid; newvars; foralls;}
-     let ground = ground
-     let existentials = existentials
-     let universals = universals
-   end)
+  WithEpsilons.{
+      main =
+        (module struct
+           let top_level =
+             Level.{id; ground = Term.(ground &&& andN existentials); rigid; newvars; foralls;}
+           let ground = ground
+           let existentials = existentials
+           let universals = universals
+         end);
+      epsilons }
 
-let process config ~global_vars body : t =
-  process config ~rigidintro:global_vars ~rigid:[] ~intro:global_vars body
+let process config ~logic ~global_vars body : t WithEpsilons.t =
+  process config ~logic ~rigidintro:global_vars ~rigid:[] ~intro:global_vars body []

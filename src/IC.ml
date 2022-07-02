@@ -1275,40 +1275,45 @@ let solve_lit x lit substs =
  *   result *)
 
 
-let solve_list conjuncts old_conditions x : Term.t list * Term.t list =
+let solve_list conjuncts var old_epsilons : Term.t list WithEpsilons.t =
   print 5 "@[<hv2>solve_list solves %a from@,%a@,@[<v>"
-    Term.pp x
+    Term.pp var
     (List.pp Term.pp) conjuncts;
   let rec aux treated accu = function
     | [] ->
       begin match accu with
         | Epsilon {body; conditions; epsilon = _ } ->
-          print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
+          print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp var Term.pp body;
           (* let aux conjunct =
-           *   let new_conjunct = Term.subst_term [x,body] conjunct in
+           *   let new_conjunct = Term.subst_term [var,body] conjunct in
            *   if not (Term.equal conjunct new_conjunct)
            *   then
            *     print 5 "@[<2>Turning conjunct %a into %a@]@," Term.pp conjunct Term.pp new_conjunct
            * in
            * List.iter aux conjuncts; *)
-          Term.subst_terms [x,body] conjuncts,
-          conditions @ Term.subst_terms [x,body] old_conditions
+          WithEpsilons.{
+              main = Term.subst_terms [var,body] conjuncts;
+              epsilons = conditions @ Term.subst_terms [var,body] old_epsilons }
         | _ ->
           (* print 5 "@[<2>solve_list does not substitute@]@,"; *)
-          conjuncts, old_conditions
+          WithEpsilons.{
+              main     = conjuncts;
+              epsilons = old_epsilons }
       end
       
     | lit::tail ->
-      match solve_lit x lit accu with
+      match solve_lit var lit accu with
 
       | Eliminate body ->
-        print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp x Term.pp body;
-        Term.subst_terms [x,body] conjuncts, Term.subst_terms [x,body] old_conditions
+        print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp var Term.pp body;
+        WithEpsilons.{
+            main     = Term.subst_terms [var,body] conjuncts;
+            epsilons = Term.subst_terms [var,body] old_epsilons }
 
       | NotGreat(Epsilon _ )
-        when List.exists (Term.is_free ~var:x) treated
-          || List.exists (Term.is_free ~var:x) tail
-          || List.exists (Term.is_free ~var:x) old_conditions  ->
+        when List.exists (Term.is_free ~var) treated
+          || List.exists (Term.is_free ~var) tail
+          || List.exists (Term.is_free ~var) old_epsilons ->
         aux (lit::treated) accu tail (* Same accu as before looking at lit; i.e. we ignore the lit *)
 
       | NotGreat subst ->
@@ -1318,30 +1323,54 @@ let solve_list conjuncts old_conditions x : Term.t list * Term.t list =
   print 5 "@]@]@,";
   result
 
-let rec get_disjuncts t =
-  let open Term in
-  match reveal t with
-  | Term(Astar(`YICES_OR_TERM,l)) ->
-    l |> List.map get_disjuncts |> List.flatten
-  | _ -> [t]
-
-let get_conjuncts t = 
-  let open Term in
-  match reveal t with
-  | Term(A1(`YICES_NOT_TERM, t)) ->
-    get_disjuncts t |> List.map Term.not1 |> List.sort_uniq ~cmp:Term.compare
-  | _ -> [t]
-
-
-let solve_all vars t =
+let elim_existentials vars t =
+  let open WithEpsilonsMonad in
   let conjuncts = get_conjuncts t in
   print 3 "@[<2>IC analyses %a@]@," Term.pp t;
-  let rec aux conjuncts conditions = function
-    | [] -> conjuncts, conditions
-    | x::vars ->
-      let conjuncts, conditions = solve_list conjuncts conditions x in
-      aux conjuncts conditions vars
+  let+ conjuncts =
+    ListWithEpsilons.fold solve_list (WithEpsilonsMonad.return conjuncts) vars
   in
-  let conjuncts, conditions = aux conjuncts [] vars in
   print 3 "@[<2>IC finished@]@,";
-  WithEpsilons.{ main = Term.andN conjuncts; epsilons = conditions }
+  return(Term.andN conjuncts)
+
+let elim_existentials_init vars t = elim_existentials vars t []
+
+let rec weaken_existential var formula =
+  let open WithEpsilonsMonad in
+  match get_disjuncts formula with
+  | (_::_::_) as disjuncts ->
+     fun epsilons ->
+     let rec aux sofar = function
+       | [] ->
+          Term.orN sofar |> return
+       | disjunct::tail ->
+          let+ residual_disjunct = weaken_existential var disjunct in 
+          if Term.is_free ~var residual_disjunct
+          then fun _ -> WithEpsilons.{ main = Term.true0(); epsilons }
+          else
+            aux (residual_disjunct::sofar) tail
+     in
+     aux [] disjuncts epsilons
+     
+  | _ ->
+     let conjuncts = get_conjuncts formula in
+     let+ new_conjuncts = solve_list conjuncts var in
+     let aux sofar conjunct =
+       match get_disjuncts conjunct with
+       | (_::_::_) ->
+          let+ new_disjunction = weaken_existential var conjunct in
+          return(new_disjunction::sofar)
+       | _ ->
+          if Term.is_free ~var conjunct then return sofar
+          else return(conjunct::sofar)
+     in
+     let+ newnew_conjuncts = ListWithEpsilons.fold aux (return []) new_conjuncts in
+     return(Term.andN newnew_conjuncts)
+     
+let weaken_existentials vars tolearn =
+  ListWithEpsilons.fold
+    (fun tolearn var -> weaken_existential var tolearn)
+    (WithEpsilonsMonad.return tolearn)
+    vars
+
+let weaken_existentials_init vars tolearn = weaken_existentials vars tolearn []

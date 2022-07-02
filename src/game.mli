@@ -1,5 +1,6 @@
 open Containers
 open Yices2.Ext_bindings
+open Utils
 
 module type T = sig
   val ground : Term.t
@@ -14,4 +15,4 @@ val pp : t Format.printer
 
 exception CannotTreat of Term.t
 
-val process : Config.t -> global_vars:Term.t list -> Term.t -> t
+val process : Config.t -> logic:logic -> global_vars:Term.t list -> Term.t -> t WithEpsilons.t

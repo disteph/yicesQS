@@ -8,15 +8,13 @@ open Yices2.Ext_bindings
 
 open Utils
 
-type logic = [ `NRA | `NIA | `LRA | `LIA | `BV | `Other ]
-   
 module type T = sig
   include Game.T
-  val logic             : logic
-  val qf_logic          : string
-  val context           : Context.t (* Main context for the solver *)
+  val logic            : logic
+  val qf_logic         : string
+  val context          : Context.t (* Main context for the solver *)
   [%%if debug_mode]
-  val epsilons_context  : Context.t (* context with only epsilon term constraints at level 0 *)
+  val epsilons_context : Context.t (* context with only epsilon term constraints at level 0 *)
 [%%endif]
 (* val learnt : Term.t list ref *)
 end
@@ -42,20 +40,7 @@ let pp_log_raw fmt ((module T:T),log) =
   let option = List[Atom "set-option"; Atom ":produce-unsat-model-interpolants"; Atom "true"] in
   Format.fprintf fmt "@[<v>%a@]" (List.pp ~pp_sep:pp_space pp_sexp) (option::sl::log)
 
-let create ~logic config (module G : Game.T) =
-  let qf_logic =
-    if String.length logic > 3 && String.equal (String.sub logic 0 3) "QF_"
-    then logic
-    else "QF_"^logic
-  in
-  let logic = match logic with
-    | "NRA" | "QF_NRA" -> `NRA
-    | "NIA" | "QF_NIA" -> `NIA
-    | "LRA" | "QF_LRA" -> `LRA
-    | "LIA" | "QF_LIA" -> `LIA
-    | "BV"  | "QF_BV"  -> `BV
-    | _     -> print_endline("Unknown logic: "^logic); `BV 
-  in
+let create ~logic ~qf_logic config (module G : Game.T) =
   (module struct
      include G
      let logic = logic
