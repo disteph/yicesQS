@@ -122,8 +122,8 @@ let rec process config ~logic ~rigidintro ~rigid ~intro body : t WithEpsilonsMon
              | _ -> return []
            in
            
+           let foralls = newforall::state.foralls in
            let newvars = SubGame.top_level.newvars @ (name::selector::state.newvars) in
-           let foralls = SubGame.top_level.foralls @ (newforall::state.foralls) in
            let existentials = SubGame.existentials @ (existential::state.existentials) in
            let universals   =
              projection @ SubGame.universals   @ (universal::state.universals) in

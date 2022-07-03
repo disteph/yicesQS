@@ -174,7 +174,8 @@ and treat_sat state level model support learnt : treat_sat_result * Term.t list 
         o.sublevel.id
         Term.pp o.name;
       aux model
-        (o.name::cumulated_support) (Term.not1 o.name::reasons4success) learnt opponents
+        (o.name::cumulated_support) (Term.not1 o.name::reasons4success) learnt
+        (o.sublevel.foralls @ opponents)
 
     (* Here we have a forall formula o that is true in the model;
        we have to make a recursive call to play the corresponding sub-game *)
