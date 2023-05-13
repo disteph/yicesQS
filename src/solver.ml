@@ -5,7 +5,7 @@ open Containers
 open Sexplib
 open Type
 open Yices2.High
-open Yices2.Ext_bindings
+open Yices2.Ext
 open Yices2.SMT2
 
 open Command_options
@@ -96,7 +96,7 @@ let rec solve state level model support : answer*SolverState.t =
       answer, state
 
     | `STATUS_SAT ->
-      let model = Context.get_model context ~keep_subst:true in
+      let SModel.{ model; _ } = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         (SModel.pp())
         SModel.{support = List.append level.newvars (Support.list support); model };
@@ -201,7 +201,9 @@ and treat_sat state level model support =
         (* This should always work *)
         assert(Types.equal_smt_status status `STATUS_SAT);
         (* This is the extended model *)
-        let recurs_model = Context.get_model o.selector_context ~keep_subst:true in
+        let SModel.{ model = recurs_model ; _} =
+          Context.get_model o.selector_context ~keep_subst:true
+        in
         solve state o.sublevel recurs_model recurs_support, recurs_model
 
       in
@@ -244,7 +246,10 @@ and treat_sat state level model support =
               (SModel.pp ()) { model; support = cumulated_support };
             match Context.check_with_model context model cumulated_support with
             | `STATUS_SAT  ->
-              Context.get_model context ~keep_subst:true |> next cumulated_support
+               let SModel.{ model; _ } = 
+                 Context.get_model context ~keep_subst:true
+               in
+               next cumulated_support model
             | `STATUS_UNSAT -> 
               print 4 "@[We learned something that defeats this model@]@,";
               None
@@ -330,7 +335,7 @@ let treat filename =
           let formula = ParseTerm.parse env formula |> Cont.get in
           (* print 2 "@[<2>Asserting formula@,%a@]@," Term.pp formula; *)
           (match env.model with
-           | Some model -> Model.free model
+           | Some { model; _ } -> Model.free model
            | None -> ());
           assertions := formula::!assertions
 

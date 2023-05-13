@@ -1,7 +1,7 @@
 open Containers
 
 open Yices2.High
-open Yices2.Ext_bindings
+open Yices2.Ext
 
 open Utils
 
@@ -45,7 +45,7 @@ module StateMonad = struct
 end
 
 (* Monadic fold and map *)
-module MList = MList(StateMonad)
+module MList = Yices2.Common.MList(StateMonad)
 include MTerm(StateMonad)
 
 (* let var_add newvar a state =
@@ -73,7 +73,7 @@ exception CannotTreat of Term.t
 
 let counter = ref 0
 
-let foralls_rev = HTerms.create 10
+let foralls_rev = Types.HTerms.create 10
 
 (* rigidintro = rigid + intro *)
 let rec process config ~rigidintro ~rigid ~intro body : t =
@@ -88,7 +88,7 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
       ->
        if false
        then
-         return(HTerms.find foralls_rev t) (* returns placeholder previously generated *)
+         return(Types.HTerms.find foralls_rev t) (* returns placeholder previously generated *)
        else
          begin
            (* Creating a selector for the forall formula *)
@@ -99,7 +99,7 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
            (* Creating a name for the forall formula *)
            let name  = "name"^freshcount in
            let name  = Term.new_uninterpreted ~name (Type.bool()) in
-           HTerms.add foralls_rev t name;
+           Types.HTerms.add foralls_rev t name;
            let substituted, rigidintro_sub, intro_sub = fresh rigidintro vars body in
            let (module SubGame) =
              process config

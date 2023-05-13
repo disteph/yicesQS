@@ -1,8 +1,10 @@
 open! Containers
 
-open Yices2.Ext_bindings
+open Yices2.Ext
 
 open Utils
+
+module HTerms = Types.HTerms
 
 let build_table model oldvar newvar =
   let tbl = HTerms.create (List.length newvar * 10) in
@@ -41,16 +43,16 @@ let generalize_model model ~true_of_model ~rigid_vars ~newvars =
       let terms = HTerms.find tbl value in (* list of rigid variables that have that value *)
       let value =
         match Term.reveal value with
-        | Term App(f, [arg]) when Term.equal f (Model.epsilon_real()) ->
-           begin
-             let Term arg = Term.reveal arg in
-             match arg with
-             | Bindings{c = `YICES_LAMBDA_TERM; vars = [yvar]; body } ->
-                let main = Term.new_uninterpreted (Type.real()) in
-                let epsilon = Term.subst_term [yvar, var] body in
-                WithEpsilons.{ main; epsilons = [epsilon] }
-             | _ -> failwith "should not be"
-           end
+        (* | Term App(f, [arg]) when Term.equal f (Model.epsilon_real()) -> *)
+        (*    begin *)
+        (*      let Term arg = Term.reveal arg in *)
+        (*      match arg with *)
+        (*      | Bindings{c = `YICES_LAMBDA_TERM; vars = [yvar]; body } -> *)
+        (*         let main = Term.new_uninterpreted (Type.real()) in *)
+        (*         let epsilon = Term.subst_term [yvar, var] body in *)
+        (*         WithEpsilons.{ main; epsilons = [epsilon] } *)
+        (*      | _ -> failwith "should not be" *)
+        (*    end *)
         | _ -> WithEpsilons.return value
       in
       print 3 "@[<v2>Trying to eliminate variable %a, with value %a and matching variables %a@]@,"

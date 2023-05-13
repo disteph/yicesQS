@@ -2,7 +2,7 @@
 
 open Containers
 
-open Yices2.Ext_bindings
+open Yices2.Ext
        
 [%%if debug_mode]
 open Command_options

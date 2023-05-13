@@ -1,6 +1,6 @@
 open! Containers
 
-open Yices2.Ext_bindings
+open Yices2.Ext
 
 type t = {
     id : int;
