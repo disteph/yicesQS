@@ -1,9 +1,11 @@
 open Containers
 
-open Yices2.High
-open Yices2.Ext_bindings
+open Yices2.Ext
+open Yices2.SMT2.WithNoErrorHandling.Ext
 
 open Utils
+
+module HTerms = Types.HTerms
 
 module type T = sig
   val ground    : Term.t (* Ground abstraction of the game, as a quantifier-free formula *)
@@ -40,7 +42,7 @@ type state = {
 module StateMonad = StateMonad(struct type t = state end)
 
 (* Monadic fold and map *)
-module MList = MList(StateMonad)
+module MList = Yices2.Common.MList(StateMonad)
 include MTerm(StateMonad)
 
 let bound_counter = ref 1

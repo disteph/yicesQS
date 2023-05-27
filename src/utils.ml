@@ -2,8 +2,7 @@
 
 open Containers
 
-open Yices2.High
-open Yices2.Ext_bindings
+open Yices2.SMT2.WithNoErrorHandling.Ext
        
 [%%if debug_mode]
 open Command_options
@@ -49,8 +48,8 @@ module WithEpsilonsMonad : Monad with type 'a t = Term.t list -> 'a WithEpsilons
   let (let+) = bind
 end
 
-module ListWithEpsilons = MList(WithEpsilonsMonad)
-                                                                                   
+module ListWithEpsilons = Yices2.Common.MList(WithEpsilonsMonad)
+
 let rec get_disjuncts t =
   let open Term in
   match reveal t with

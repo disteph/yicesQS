@@ -1,7 +1,8 @@
 open Containers
-open Yices2.High
-open Yices2.Ext_bindings
+open Yices2.Ext
 open Yices2.SMT2
+open WithNoErrorHandling
+open Ext
 
 open Solver
 open Command_options
@@ -121,7 +122,7 @@ match !args with
      Format.(fprintf stdout) "Backtrace is:@,@[%s@]@]%!" (Printexc.get_backtrace());
      raise exc
 
-   | ExceptionsErrorHandling.YicesException(_,report) as exc ->
+   | Yices2.High.ExceptionsErrorHandling.YicesException(_,report) as exc ->
       let bcktrace = Printexc.get_backtrace() in
       Format.(fprintf stdout) "@[Yices error: @[%s@]@]@," (ErrorPrint.string());
       Format.(fprintf stdout) "@[Error report:@,@[<v2>  %a@]@,"

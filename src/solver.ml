@@ -4,9 +4,10 @@ open Containers
 
 open Sexplib
 open Type
-open Yices2.High
-open Yices2.Ext_bindings
+open Yices2.Ext
 open Yices2.SMT2
+open WithNoErrorHandling
+open Ext
 
 open Command_options
 open Utils
@@ -79,6 +80,7 @@ let rec solve state level model support learnt : answer * SolverState.t * Term.t
     print 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
       Level.pp level
       (SModel.pp()) { model; support = Support.list support };
+    print 1 "@]%!@[<v>";
 
     print 4 "@[Trying to solve over-approximations@]@,";
     let status =
@@ -99,7 +101,7 @@ let rec solve state level model support learnt : answer * SolverState.t * Term.t
       answer, state, Term.andN learnt
 
     | `STATUS_SAT ->
-      let model = Context.get_model context ~keep_subst:true in
+      let SModel.{model; _} = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         (SModel.pp())
         SModel.{support = List.append level.newvars (Support.list support); model };
@@ -108,7 +110,7 @@ let rec solve state level model support learnt : answer * SolverState.t * Term.t
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
   with
-    ExceptionsErrorHandling.YicesException(_,report) ->
+    Yices2.High.ExceptionsErrorHandling.YicesException(_,report) ->
     raise (FromYicesException(state, level,report, Printexc.get_backtrace()))
 
 and post_process state level model support learnt =
@@ -205,7 +207,9 @@ and treat_sat state level model support learnt : treat_sat_result * Term.t list 
         (* This should always work *)
         assert(Types.equal_smt_status status `STATUS_SAT);
         (* This is the extended model *)
-        let recurs_model = Context.get_model o.selector_context ~keep_subst:true in
+        let SModel.{ model = recurs_model; _ } =
+          Context.get_model o.selector_context ~keep_subst:true
+        in
         solve state o.sublevel recurs_model recurs_support [], recurs_model
 
       in
@@ -351,7 +355,7 @@ let treat filename =
            let formula = ParseTerm.parse env formula |> Cont.get in
            (* print 2 "@[<2>Asserting formula@,%a@]@," Term.pp formula; *)
            (match env.model with
-            | Some model -> Model.free model
+            | Some model -> Model.free SModel.(model.model)
             | None -> ());
            assertions := formula::!assertions
 
