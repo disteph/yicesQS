@@ -5,7 +5,7 @@ open Containers
 open Sexplib
 open Type
 open Yices2.Ext
-open Yices2.SMT2.WithNoErrorHandling.Ext
+open WithNoErrorHandling
 
 open Utils
 

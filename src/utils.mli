@@ -1,6 +1,6 @@
 open Containers
 
-open Yices2.SMT2.WithNoErrorHandling.Ext
+open Yices2.Ext.WithNoErrorHandling
 
 val get_disjuncts : Term.t -> Term.t list
 val get_conjuncts : Term.t -> Term.t list

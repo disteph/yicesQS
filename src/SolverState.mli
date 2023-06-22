@@ -1,7 +1,7 @@
 [%%import "debug.mlh"]
 
 open Containers
-open Yices2.SMT2.WithNoErrorHandling.Ext
+open Yices2.Ext.WithNoErrorHandling
 open Utils
 
 module type T = sig

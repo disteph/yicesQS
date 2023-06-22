@@ -2,7 +2,6 @@ open Containers
 open Yices2.Ext
 open Yices2.SMT2
 open WithNoErrorHandling
-open Ext
 
 open Solver
 open Command_options

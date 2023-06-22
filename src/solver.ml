@@ -7,7 +7,9 @@ open Type
 open Yices2.Ext
 open Yices2.SMT2
 open WithNoErrorHandling
-open Ext
+
+module SMT2 = Yices2.SMT2.Make(WithNoErrorHandling)
+open SMT2
 
 open Command_options
 open Utils

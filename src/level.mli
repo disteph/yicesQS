@@ -1,6 +1,6 @@
 open! Containers
 
-open Yices2.SMT2.WithNoErrorHandling.Ext
+open Yices2.Ext.WithNoErrorHandling
 
 type t = {
     id : int;

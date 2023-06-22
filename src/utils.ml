@@ -2,7 +2,7 @@
 
 open Containers
 
-open Yices2.SMT2.WithNoErrorHandling.Ext
+open Yices2.Ext.WithNoErrorHandling
        
 [%%if debug_mode]
 open Command_options

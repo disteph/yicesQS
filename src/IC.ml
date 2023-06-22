@@ -1,6 +1,6 @@
 open! Containers
 open Yices2.Ext
-open Yices2.SMT2.WithNoErrorHandling.Ext
+open WithNoErrorHandling
 open Utils
 
 module OptionMonad = struct
