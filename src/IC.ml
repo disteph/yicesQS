@@ -921,8 +921,8 @@ module Monad = struct
     { original = f_original.original;
       variants = LazyList.fold aux f_original.variants arg.variants }
 
-  let (let*) = bind
-  let (let+) a f = bind a (fun r -> return(f r))
+  (* let (let*\) = bind *)
+  (* let (let+) a f = bind a (fun r -> return(f r)) *)
 
 end
 

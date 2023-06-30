@@ -47,7 +47,7 @@ let check state level model support reason =
     Term.pp reason;
   Context.push S.epsilons_context;
   Context.assert_formula S.epsilons_context (Term.not1 reason);
-  match Context.check_with_model S.epsilons_context model support with
+  match Context.check S.epsilons_context ~smodel:(SModel.make model ~support) with
   | `STATUS_SAT   ->
     print 3 "@[<v2>It does not satisfy it@]@,";
     raise (BadUnder(state, level, reason))
@@ -88,7 +88,8 @@ let rec solve state level model support learnt : answer * SolverState.t * Term.t
     let status =
       match support with
       | Empty -> print 0 "."; Context.check context
-      | S _   -> print 0 "."; Context.check_with_model context model (Support.list support)
+      | S _   -> print 0 "."; Context.check context
+                                ~smodel:(SModel.make ~support:(Support.list support) model)
     in
     match status with
 
@@ -103,7 +104,7 @@ let rec solve state level model support learnt : answer * SolverState.t * Term.t
       answer, state, Term.andN learnt
 
     | `STATUS_SAT ->
-      let SModel.{model; _} = Context.get_model context ~keep_subst:true in
+      let SModel.{model; _} = Context.get_model context ~keep_subst:true ~support:(Support.list support) in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         (SModel.pp())
         SModel.{support = List.append level.newvars (Support.list support); model };
@@ -204,7 +205,8 @@ and treat_sat state level model support learnt : treat_sat_result * Term.t list 
          * else *)
         (* We extend the model by setting the selector to true *)
         let status =
-          Context.check_with_model o.selector_context model o.sublevel.rigid
+          Context.check o.selector_context
+            ~smodel:(SModel.make model ~support:o.sublevel.rigid)
         in
         (* This should always work *)
         assert(Types.equal_smt_status status `STATUS_SAT);
