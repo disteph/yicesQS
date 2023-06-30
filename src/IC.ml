@@ -1,6 +1,6 @@
 open! Containers
 open Yices2.High
-open Yices2.Ext
+open Yices2.Ext.WithNoErrorHandling
 open Utils
 
 module OptionMonad = struct
@@ -921,8 +921,8 @@ module Monad = struct
     { original = f_original.original;
       variants = LazyList.fold aux f_original.variants arg.variants }
 
-  let (let*) = bind
-  let (let+) a f = bind a (fun r -> return(f r))
+  (* let (let*\) = bind *)
+  (* let (let+) a f = bind a (fun r -> return(f r)) *)
 
 end
 

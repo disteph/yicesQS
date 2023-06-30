@@ -4,9 +4,11 @@ open Containers
 
 open Sexplib
 open Type
-open Yices2.High
 open Yices2.Ext
-open Yices2.SMT2
+open WithNoErrorHandling
+
+module SMT2 = Yices2.SMT2.Make(Yices2.Ext.WithNoErrorHandling)
+open SMT2
 
 open Command_options
 open Utils
@@ -81,7 +83,8 @@ let rec solve state level model support : answer*SolverState.t =
     let status =
       match support with
       | Empty -> print 0 "."; Context.check context
-      | S _   -> print 0 "."; Context.check_with_model context model (Support.list support)
+      | S _   -> print 0 "."; Context.check context
+                                ~smodel:(SModel.make model ~support:(Support.list support))
     in
     match status with
 
@@ -196,7 +199,8 @@ and treat_sat state level model support =
          * else *)
         (* We extend the model by setting the selector to true *)
         let status =
-          Context.check_with_model o.selector_context model o.sublevel.rigid
+          Context.check o.selector_context
+            ~smodel:(SModel.make model ~support:o.sublevel.rigid)
         in
         (* This should always work *)
         assert(Types.equal_smt_status status `STATUS_SAT);
@@ -244,7 +248,7 @@ and treat_sat state level model support =
             in
             print 4 "@[Now checking whether our model %a violates anything we have learnt@]@,"
               (SModel.pp ()) { model; support = cumulated_support };
-            match Context.check_with_model context model cumulated_support with
+            match Context.check context ~smodel:(SModel.make model ~support:cumulated_support) with
             | `STATUS_SAT  ->
                let SModel.{ model; _ } = 
                  Context.get_model context ~keep_subst:true
@@ -325,14 +329,14 @@ let treat filename =
 
         | "declare-fun", [Atom name; List []; typ], Some env
         | "declare-const", [Atom name; typ], Some env ->
-          let ytype = ParseType.parse env.types typ |> Cont.get in
+          let ytype = ParseType.parse env.types typ |> Yices2.SMT2.Cont.get in
           let yvar = Term.new_uninterpreted ~name ytype in
           support := yvar :: !support;
           (* print 2 "@[<2>  declared fun/cst is %a@]@," Term.pp yvar; *)
           Variables.permanently_add env.variables name yvar
 
         | "assert", [formula], Some env ->
-          let formula = ParseTerm.parse env formula |> Cont.get in
+          let formula = ParseTerm.parse env formula |> Yices2.SMT2.Cont.get in
           (* print 2 "@[<2>Asserting formula@,%a@]@," Term.pp formula; *)
           (match env.model with
            | Some { model; _ } -> Model.free model
