@@ -323,8 +323,12 @@ let treat filename =
   let sexps = SMT2.load_file filename in
   let set_logic logic config =
     print 3 "@[Setting logic to %s@]@," logic;
-    Config.set config ~name:"solver-type" ~value:"mcsat";
-    Config.set config ~name:"model-interpolation" ~value:"true";
+    if not(String.equal "BV" logic)
+    then
+      begin 
+        Config.set config ~name:"solver-type" ~value:"mcsat";
+        Config.set config ~name:"model-interpolation" ~value:"true";
+      end;
     Config.set config ~name:"mode" ~value:"multi-checks"
   in
   let session    = Session.create ~set_logic 0 in
