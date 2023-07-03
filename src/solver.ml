@@ -46,7 +46,7 @@ let check state level model support reason =
     Term.pp reason;
   Context.push S.epsilons_context;
   Context.assert_formula S.epsilons_context (Term.not1 reason);
-  match Context.check_with_model S.epsilons_context model support with
+  match Context.check S.epsilons_context ~smodel:(SModel.make model ~support) with
   | `STATUS_SAT   ->
     print 3 "@[<v2>It does not satisfy it@]@,";
     raise (BadUnder(state, level, reason))
