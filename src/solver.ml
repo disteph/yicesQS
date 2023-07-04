@@ -32,10 +32,10 @@ type answer =
   | Sat of Term.t list
 [@@deriving show { with_path = false }]
 
-exception BadInterpolant of SolverState.t * Level.t * Term.t
-exception BadUnder of SolverState.t * Level.t * Term.t
+exception BadInterpolant     of SolverState.t * Level.t * Term.t
+exception BadUnder           of SolverState.t * Level.t * Term.t
 exception FromYicesException of SolverState.t * Level.t * Types.error_report * string
-exception WrongAnswer of SolverState.t * answer
+exception WrongAnswer        of SolverState.t * answer
 
 [%%if debug_mode]
 
@@ -124,10 +124,11 @@ and treat_sat state level model support =
   let open S in
 
   (* Now we look at each forall formula that we have to satisfy, one by one *)
-  let rec aux model cumulated_support reasons = function
+  let rec aux model cumulated_support reasons foralls =
+    match foralls() with
 
     (* We have satisfied all forall formulae; our model is good! *)
-    | [] ->
+    | Seq.Nil ->
       let reasons = Level.(level.ground)::reasons in
       (* We first aggregate the reasons why our model worked *)
       (* Any model satisfying true_of_model would have been a good model *)
@@ -170,15 +171,18 @@ and treat_sat state level model support =
 
     (* Here we have a forall formula o that is false in the model;
        the reason why we don't have to look at it is that o is false in the model. *)
-    | o :: opponents when not (Model.get_bool_value model Level.(o.name)) ->
+    | Seq.Cons(o, opponents) when not (Model.get_bool_value model Level.(o.name)) ->
       print 4 "@[Level %i does not need to be looked at as %a is false@]@,"
         o.sublevel.id
         Term.pp o.name;
-      aux model (o.name::cumulated_support) (Term.not1 o.name::reasons) opponents
+      aux model
+        (o.name::cumulated_support)
+        (Term.not1 o.name::reasons)
+        (Seq.append o.sublevel.foralls opponents)
 
     (* Here we have a forall formula o that is true in the model;
        we have to make a recursive call to play the corresponding sub-game *)
-    | o :: opponents ->
+    | Seq.Cons(o, opponents) ->
       print 4 "@[Level %i needs to be looked at as %a is true@]@,"
         o.sublevel.id
         Term.pp o.name;
@@ -235,7 +239,7 @@ and treat_sat state level model support =
           in
           match opponents with
           | _ -> next cumulated_support model (* This was the last opponent. *)
-          | _::_ ->
+          | _ ->
             (* If there is another opponent coming, we may want to update our current model
                according to the lemmas we've learnt from the recursive call
                and that our current model may be violating. *)

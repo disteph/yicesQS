@@ -7,8 +7,8 @@ open Utils
 
 module type T = sig
   val ground    : Term.t (* Ground abstraction of the game, as a quantifier-free formula *)
-  val existentials : Term.t list
-  val universals   : Term.t list
+  val existentials : Term.t Seq.t
+  val universals   : Term.t Seq.t
   val top_level : Level.t
 end
 
@@ -22,7 +22,7 @@ let pp fmt (module T:T) =
                       @[<v 2>Levels:@,%a@]\
                       @]"
     Term.pp ground
-    (List.pp ~pp_sep:pp_space Term.pp) existentials
+    (List.pp ~pp_sep:pp_space Term.pp) (Seq.to_list existentials)
     Level.pp top_level
 
 (* The encoding of a formula into a game is done with a state monad,
@@ -31,8 +31,8 @@ let pp fmt (module T:T) =
 type state = {
     newvars : Term.t list;
     foralls : Level.forall list;
-    existentials : Term.t list;
-    universals   : Term.t list
+    existentials : Term.t Seq.t;
+    universals   : Term.t Seq.t
   }
 
 (* The state monad *)
@@ -146,9 +146,13 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
            fun state ->
            print 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
            let newvars = SubGame.top_level.newvars @ (name::selector::state.newvars) in
-           let foralls = SubGame.top_level.foralls @ (newforall::state.foralls) in
-           let existentials = SubGame.existentials @ (existential::state.existentials) in
-           let universals   = SubGame.universals   @ (universal::state.universals) in
+           let foralls = newforall::state.foralls in
+           let existentials =
+             Seq.(append SubGame.existentials (cons existential state.existentials))
+           in
+           let universals   =
+             Seq.(append SubGame.universals (cons universal state.universals))
+           in
            name, { newvars; foralls; existentials; universals }
          end
     | Bindings { c = `YICES_LAMBDA_TERM; _ } -> raise(CannotTreat t)
@@ -158,11 +162,15 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
   in
   print 5 "@[<v2>Traversing term@,%a@]@," Term.pp body;
   let id = !counter in
-  let state = { newvars = intro; foralls = []; existentials = []; universals = []; } in
+  let state = { newvars = intro;
+                foralls      = [];
+                existentials = Seq.nil;
+                universals   = Seq.nil; }
+  in
   let ground, { newvars; foralls; existentials; universals } = aux body state in
-  let foralls = List.rev foralls in
   (module struct
-     let top_level = Level.{id; ground = Term.(ground &&& andN existentials); rigid; newvars; foralls;}
+     let top_level =
+       Level.{id; ground = Term.(ground &&& andN (Seq.to_list existentials)); rigid; newvars; foralls = Seq.of_list foralls;}
      let ground = ground
      let existentials = existentials
      let universals = universals

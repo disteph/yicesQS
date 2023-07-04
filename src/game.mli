@@ -3,8 +3,8 @@ open Yices2.Ext.WithNoErrorHandling
 
 module type T = sig
   val ground : Term.t
-  val existentials : Term.t list
-  val universals : Term.t list
+  val existentials : Term.t Seq.t
+  val universals : Term.t Seq.t
   val top_level : Level.t
 end
 
