@@ -48,10 +48,7 @@ end
 module MList = Yices2.Common.MList(StateMonad)
 include MTerm(StateMonad)
 
-(* let var_add newvar a state =
- *   let newvars = newvar::state.newvars in
- *   a, { state with newvars } *)
-
+(* Create fresh names for turning bound variables into eigenvariables *)
 let bound_counter = ref 1
 
 let fresh_bound () : string =
@@ -59,26 +56,43 @@ let fresh_bound () : string =
   incr bound_counter;
   name
 
-let fresh rigid bound body : Term.t * Term.t list * Term.t list =
-  let aux (subst, rigid, newvars) v =
+(* Given a Yices forall term, with bound variables and body,
+   - create fresh eigenvariables newvars for each bound variable
+   - substitute these eigenvariables for the bound variables in the body
+   - accumulate the new eigenvariables in the accumulator passed as argument
+   - return the substituted body, the accumulator, the new eigenvariables
+ *)
+let fresh ~accu bound body : Term.t * Term.t list * Term.t list =
+  let aux (subst, accu, newvars) v =
     let typ = Term.type_of_term v in
     let name = fresh_bound() in
     let newvar = Term.new_uninterpreted ~name typ in
-    ((v,newvar)::subst), (newvar::rigid), (newvar::newvars)
+    ((v,newvar)::subst), (newvar::accu), (newvar::newvars)
   in
-  let subst, rigid, newvars = List.fold_left aux ([], rigid, []) bound in
+  let subst, rigid, newvars = List.fold_left aux ([], accu, []) bound in
   Term.subst_term subst body, rigid, newvars
 
 exception CannotTreat of Term.t
 
 let counter = ref 0
 
+(* Ideally, if we see the same forall subformula several times,
+   we should only turn it into a game once and re-use the same game at every occurrence.
+   To detect this, we need a map from forall terms to games *)
 let foralls_rev = Types.HTerms.create 10
 
-(* rigidintro = rigid + intro *)
+(* Core procedure for encoding a formula (\exists intros.body) into a game.
+   - config is the Yices config
+   - intros and body are describing the existential formula we're encoding
+   - rigid are the variables that will be set be the ancestor games
+   - rigidintro = rigid + intro; for some reason this is useful
+   and we want to avoid the cost of concatenation everytime we need it.
+ *)
 let rec process config ~rigidintro ~rigid ~intro body : t =
   let open StateMonad in
 
+  (* This auxiliary function descends into the term structure of body
+     in order to find subformulas of the form forall *)
   let rec aux t : Term.t StateMonad.t =
     let Term a = Term.reveal t in
     match a with
@@ -86,9 +100,13 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
                  vars;
                  body }
       ->
-       if false
+       if false (* This is the place where we should reuse the same game
+                   if we see a forall formula several times.
+                   Currently we're not doing it because in practice
+                   that happens very rarely
+                   and we are saving some CPU cycles for the SMT-comp *)
        then
-         return(Types.HTerms.find foralls_rev t) (* returns placeholder previously generated *)
+         return(Types.HTerms.find foralls_rev t) (* returns game previously generated *)
        else
          begin
            (* Creating a selector for the forall formula *)
@@ -99,20 +117,31 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
            (* Creating a name for the forall formula *)
            let name  = "name"^freshcount in
            let name  = Term.new_uninterpreted ~name (Type.bool()) in
-           Types.HTerms.add foralls_rev t name;
-           let substituted, rigidintro_sub, intro_sub = fresh rigidintro vars body in
+           (* Types.HTerms.add foralls_rev t name; *)
+           (* We replace bound variables by eigenvariables *)
+           let substituted, rigidintro_sub, intro_sub = fresh ~accu:rigidintro vars body in
+           (* we recursively create a subgame *)
            let (module SubGame) =
              process config
                ~rigidintro:rigidintro_sub
                ~rigid:rigidintro
                ~intro:intro_sub
-               (Term.not1 substituted) in
+               (Term.not1 substituted) (* Negation because process works on existentials *)
+           in
            let selector_context = Context.malloc ~config () in
            Context.assert_formula selector_context selector;
            let newforall =
              Level.{ name; selector; selector_context; sublevel = SubGame.top_level }
            in
+           (* name stands for (\forall vars.body),
+              and SubGame.ground should hold if the existential formula is true;
+              hence, the implication (not name) => SubGame.ground should always hold.
+              See the notion of Look-ahead Formula LF in the QSMA paper, definition 6.
+            *)
            let existential = Term.(name ||| SubGame.ground) in
+           (* The selector is just a way to assert the Look-ahead Formula of the subgame
+              Technically we just need (selector ==> SubGame.ground),
+              but experiments show slightly better results with ===; who knows why... *)
            let universal   = Term.(selector === SubGame.ground) in
            fun state ->
            print 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
