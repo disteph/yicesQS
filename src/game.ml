@@ -170,7 +170,11 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
   let ground, { newvars; foralls; existentials; universals } = aux body state in
   (module struct
      let top_level =
-       Level.{id; ground = Term.(ground &&& andN (Seq.to_list existentials)); rigid; newvars; foralls = Seq.of_list foralls;}
+       Level.{id;
+              ground = Term.(ground &&& andN (Seq.to_list existentials));
+              rigid;
+              newvars;
+              foralls = Seq.of_list foralls }
      let ground = ground
      let existentials = existentials
      let universals = universals
