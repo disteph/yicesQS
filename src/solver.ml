@@ -5,9 +5,9 @@ open Containers
 open Sexplib
 open Type
 open Yices2.Ext
-open WithNoErrorHandling
+open Ext
 
-module SMT2 = Yices2.SMT2.Make(Yices2.Ext.WithNoErrorHandling)
+module SMT2 = Yices2.SMT2.Make(Ext)
 open SMT2
 
 open Command_options

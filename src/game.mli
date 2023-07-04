@@ -1,5 +1,5 @@
 open Containers
-open Yices2.Ext.WithNoErrorHandling
+open Ext
 
 module type T = sig
   val ground : Term.t

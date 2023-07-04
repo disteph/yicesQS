@@ -1,7 +1,7 @@
 [%%import "debug.mlh"]
 
 open Containers
-open Yices2.Ext.WithNoErrorHandling
+open Ext
 
 type logic = [ `NRA | `NIA | `LRA | `LIA | `BV | `Other ]
 

@@ -1,6 +1,6 @@
 open! Containers
 
-open Yices2.Ext.WithNoErrorHandling
+open Ext
 
 type t = {
     id : int;
