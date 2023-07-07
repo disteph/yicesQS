@@ -1,17 +1,14 @@
 open Containers
-open Yices2.Ext.WithNoErrorHandling
+open Ext
 
 open Utils
 
-type t = {
+type t = { (* See comments in mli *)
     id : int;
     ground  : Term.t;
-    rigid   : Term.t list; (* Eigenvariables that will systematically be set by ancestor games *)
-    newvars : Term.t list; (* Eigenvariables to be set by this game, disjoint from above *)
-    (* If uninterpreted constant u abstracts away formula (\forall x1...xn neg A), then *)
-    foralls : forall list; (* ... (\forall x1..x2 neg A) is turned into an adversarial
-                                    game g and (u,g) goes into that list;
-                                    these games are the children game of the current game *)
+    rigid   : Term.t list;
+    newvars : Term.t list;
+    foralls : forall Seq.t;
   }
 and forall = {
     name : Term.t;
@@ -37,13 +34,17 @@ and pp_forall fmt {name; selector = _; sublevel; selector_context = _} =
   Format.fprintf fmt "@[<v 2>%a opens sub-level@,%a@]"
     Term.pp name
     pp sublevel
-and pp_foralls fmt = function
-  | [] -> ()
-  | foralls -> Format.fprintf fmt "@,@[<v2>%i ∀-formula(e) / sub-level(s):@,%a@]"
-                 (List.length foralls) (List.pp ~pp_sep:pp_space pp_forall) foralls
+and pp_foralls fmt foralls =
+  match foralls() with
+  | Seq.Nil -> ()
+  | _ -> Format.fprintf fmt "@,@[<v2>%i ∀-formula(e) / sub-level(s):@,%a@]"
+           (Seq.length foralls)
+           (List.pp ~pp_sep:pp_space pp_forall)
+           (Seq.to_list foralls)
+
 
 let rec free level =
-  List.iter free_forall level.foralls
+  Seq.iter free_forall level.foralls
 and free_forall {selector_context; sublevel; _} =
   Context.free selector_context;
   free sublevel

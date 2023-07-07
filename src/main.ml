@@ -1,7 +1,6 @@
 open Containers
 open Yices2.Ext
-open Yices2.SMT2
-open WithNoErrorHandling
+open Ext
 
 open Solver
 open Command_options
@@ -115,7 +114,7 @@ match !args with
      Format.(fprintf stdout) "@[Backtrace is:@,@[%s@]@]@]%!" bcktrace;
      raise exc
 
-   | Yices_SMT2_exception s as exc ->
+   | Yices2.SMT2.Yices_SMT2_exception s as exc ->
      copy_input filename "SMT_exc" |> if_filedump;
      Format.(fprintf stdout) "@[SMT2 error: %s@]@," s;
      Format.(fprintf stdout) "Backtrace is:@,@[%s@]@]%!" (Printexc.get_backtrace());

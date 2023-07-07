@@ -5,10 +5,9 @@ open Containers
 open Sexplib
 open Type
 open Yices2.Ext
-open Yices2.SMT2
-open WithNoErrorHandling
+open Ext
 
-module SMT2 = Yices2.SMT2.Make(WithNoErrorHandling)
+module SMT2 = Yices2.SMT2.Make(Ext)
 open SMT2
 
 open Command_options
@@ -33,10 +32,10 @@ type answer =
   | Sat of Term.t list
 [@@deriving show { with_path = false }]
 
-exception BadInterpolant of SolverState.t * Level.t * Term.t
-exception BadUnder of SolverState.t * Level.t * Term.t
+exception BadInterpolant     of SolverState.t * Level.t * Term.t
+exception BadUnder           of SolverState.t * Level.t * Term.t
 exception FromYicesException of SolverState.t * Level.t * Types.error_report * string
-exception WrongAnswer of SolverState.t * answer
+exception WrongAnswer        of SolverState.t * answer
 
 [%%if debug_mode]
 
@@ -89,7 +88,7 @@ let rec solve state level model support learnt : answer * SolverState.t * Term.t
       match support with
       | Empty -> print 0 "."; Context.check context
       | S _   -> print 0 "."; Context.check context
-                                ~smodel:(SModel.make ~support:(Support.list support) model)
+                                ~smodel:(SModel.make model ~support:(Support.list support))
     in
     match status with
 
@@ -104,7 +103,7 @@ let rec solve state level model support learnt : answer * SolverState.t * Term.t
       answer, state, Term.andN learnt
 
     | `STATUS_SAT ->
-      let SModel.{model; _} = Context.get_model context ~keep_subst:true ~support:(Support.list support) in
+      let SModel.{ model; _ } = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         (SModel.pp())
         SModel.{support = List.append level.newvars (Support.list support); model };
@@ -128,11 +127,20 @@ and treat_sat state level model support learnt : treat_sat_result * Term.t list 
   let (module S:SolverState.T) = state in
 
   (* Now we look at each forall formula that we have to satisfy, one by one *)
-  let rec aux model cumulated_support reasons4success (learnt : Term.t list) = function
+(* <<<<<<< HEAD *)
+(*   let rec aux model cumulated_support reasons4success (learnt : Term.t list) = function *)
+
+(*     (\* We have satisfied all forall formulae; our model is good! *\) *)
+(*     | [] -> *)
+(*       let reasons4success = Level.(level.ground)::reasons4success in *)
+(* ======= *)
+  let rec aux model cumulated_support reasons foralls =
+    match foralls() with
 
     (* We have satisfied all forall formulae; our model is good! *)
-    | [] ->
-      let reasons4success = Level.(level.ground)::reasons4success in
+    | Seq.Nil ->
+      let reasons = Level.(level.ground)::reasons in
+(* >>>>>>> FANorNAN *)
       (* We first aggregate the reasons why our model worked *)
       (* Any model satisfying true_of_model would have been a good model *)
       let true_of_model = Term.andN reasons4success in
@@ -174,17 +182,23 @@ and treat_sat state level model support learnt : treat_sat_result * Term.t list 
 
     (* Here we have a forall formula o that is false in the model;
        the reason why we don't have to look at it is that o is false in the model. *)
-    | o :: opponents when not (Model.get_bool_value model Level.(o.name)) ->
+    | Seq.Cons(o, opponents) when not (Model.get_bool_value model Level.(o.name)) ->
       print 4 "@[Level %i does not need to be looked at as %a is false@]@,"
         o.sublevel.id
         Term.pp o.name;
       aux model
-        (o.name::cumulated_support) (Term.not1 o.name::reasons4success) learnt
-        (o.sublevel.foralls @ opponents)
+(* <<<<<<< HEAD *)
+(*         (o.name::cumulated_support) (Term.not1 o.name::reasons4success) learnt *)
+(*         (o.sublevel.foralls @ opponents) *)
+(* ======= *)
+        (o.name::cumulated_support)
+        (Term.not1 o.name::reasons)
+        (Seq.append o.sublevel.foralls opponents)
+(* >>>>>>> FANorNAN *)
 
     (* Here we have a forall formula o that is true in the model;
        we have to make a recursive call to play the corresponding sub-game *)
-    | o :: opponents ->
+    | Seq.Cons(o, opponents) ->
       print 4 "@[Level %i needs to be looked at as %a is true@]@,"
         o.sublevel.id
         Term.pp o.name;
@@ -211,10 +225,17 @@ and treat_sat state level model support learnt : treat_sat_result * Term.t list 
         (* This should always work *)
         assert(Types.equal_smt_status status `STATUS_SAT);
         (* This is the extended model *)
-        let SModel.{ model = recurs_model; _ } =
+(* <<<<<<< HEAD *)
+(*         let SModel.{ model = recurs_model; _ } = *)
+(*           Context.get_model o.selector_context ~keep_subst:true *)
+(*         in *)
+(*         solve state o.sublevel recurs_model recurs_support [], recurs_model *)
+(* ======= *)
+        let SModel.{ model = recurs_model ; _} =
           Context.get_model o.selector_context ~keep_subst:true
         in
-        solve state o.sublevel recurs_model recurs_support [], recurs_model
+        solve state o.sublevel recurs_model recurs_support, recurs_model
+(* >>>>>>> FANorNAN *)
 
       in
 
@@ -253,29 +274,31 @@ and treat_sat state level model support learnt : treat_sat_result * Term.t list 
             (* we add the reason and continue with the next opponents *)
             aux model cumulated_support (reason::reasons4success) learnt opponents
           in
-          next cumulated_support model
-          (* match opponents with *)
-          (* | _ -> next cumulated_support model (\* This was the last opponent. *\) *)
-          (* | _::_ ->
-           *   (\* If there is another opponent coming, we may want to update our current model
-           *      according to the lemmas we've learnt from the recursive call
-           *      and that our current model may be violating. *\)
-           *   (\* We first augment the cumulated support with those variables that matter for
-           *      reason to hold *\)
-           *   let var_that_matter = Model.model_term_support model reason in
-           *   (\* Then we add them to the cumulative support *\)
-           *   let cumulated_support =
-           *     List.sorted_merge_uniq ~cmp:Term.compare var_that_matter cumulated_support
-           *   in
-           *   print 4 "@[Now checking whether our model %a violates anything we have learnt@]@,"
-           *     (SModel.pp ()) { model; support = cumulated_support };
-           *   match Context.check_with_model context model cumulated_support with
-           *   | `STATUS_SAT  ->
-           *     Context.get_model context ~keep_subst:true |> next cumulated_support
-           *   | `STATUS_UNSAT -> 
-           *     print 4 "@[We learned something that defeats this model@]@,";
-           *     None
-           *   | _ -> assert false *)
+          match opponents with
+          | _ -> next cumulated_support model (* This was the last opponent. *)
+          | _ ->
+            (* If there is another opponent coming, we may want to update our current model
+               according to the lemmas we've learnt from the recursive call
+               and that our current model may be violating. *)
+            (* We first augment the cumulated support with those variables that matter for
+               reason to hold *)
+            let var_that_matter = Model.model_term_support model reason in
+            (* Then we add them to the cumulative support *)
+            let cumulated_support =
+              List.sorted_merge_uniq ~cmp:Term.compare var_that_matter cumulated_support
+            in
+            print 4 "@[Now checking whether our model %a violates anything we have learnt@]@,"
+              (SModel.pp ()) { model; support = cumulated_support };
+            match Context.check context ~smodel:(SModel.make model ~support:cumulated_support) with
+            | `STATUS_SAT  ->
+               let SModel.{ model; _ } = 
+                 Context.get_model context ~keep_subst:true
+               in
+               next cumulated_support model
+            | `STATUS_UNSAT -> 
+              print 4 "@[We learned something that defeats this model@]@,";
+              None
+            | _             -> assert false
         end
 
       | Sat reasons4failure ->
@@ -353,19 +376,28 @@ let treat filename =
 
         | "declare-fun", [Atom name; List []; typ], Some env
         | "declare-const", [Atom name; typ], Some env ->
-          let ytype = ParseType.parse env.types typ |> Cont.get in
+          let ytype = ParseType.parse env.types typ |> Yices2.SMT2.Cont.get in
           let yvar = Term.new_uninterpreted ~name ytype in
           support := yvar :: !support;
           (* print 2 "@[<2>  declared fun/cst is %a@]@," Term.pp yvar; *)
           Variables.permanently_add env.variables name yvar
 
         | "assert", [formula], Some env ->
-           let formula = ParseTerm.parse env formula |> Cont.get in
-           (* print 2 "@[<2>Asserting formula@,%a@]@," Term.pp formula; *)
-           (match env.model with
-            | Some model -> Model.free SModel.(model.model)
-            | None -> ());
-           assertions := formula::!assertions
+(* <<<<<<< HEAD *)
+(*            let formula = ParseTerm.parse env formula |> Cont.get in *)
+(*            (\* print 2 "@[<2>Asserting formula@,%a@]@," Term.pp formula; *\) *)
+(*            (match env.model with *)
+(*             | Some model -> Model.free SModel.(model.model) *)
+(*             | None -> ()); *)
+(*            assertions := formula::!assertions *)
+(* ======= *)
+          let formula = ParseTerm.parse env formula |> Yices2.SMT2.Cont.get in
+          (* print 2 "@[<2>Asserting formula@,%a@]@," Term.pp formula; *)
+          (match env.model with
+           | Some { model; _ } -> Model.free model
+           | None -> ());
+          assertions := formula::!assertions
+(* >>>>>>> FANorNAN *)
 
         | "check-sat", [], Some env ->
            let formula = Term.(andN !assertions) in

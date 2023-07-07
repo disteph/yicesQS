@@ -5,7 +5,7 @@ open Containers
 open Sexplib
 open Type
 open Yices2.Ext
-open WithNoErrorHandling
+open Ext
 
 open Utils
 
@@ -51,8 +51,8 @@ let create ~logic ~qf_logic config (module G : Game.T) =
 [%%endif]
      let context          = Context.malloc ~config ()
      let () = Context.assert_formula context ground
-     let () = Context.assert_formulas context existentials
-     let () = Context.assert_formulas context universals
+     let () = Context.assert_formulas context (Seq.to_list existentials)
+     let () = Context.assert_formulas context (Seq.to_list universals)
                                       (* let learnt = ref [] *)
    end : T)
 

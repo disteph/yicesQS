@@ -1,7 +1,7 @@
 open! Containers
 
 open Yices2.Ext
-open WithNoErrorHandling
+open Ext
 
 open Utils
 

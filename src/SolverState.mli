@@ -1,8 +1,9 @@
 [%%import "debug.mlh"]
 
 open Containers
-open Yices2.Ext.WithNoErrorHandling
-open Utils
+open Ext
+
+type logic = [ `NRA | `NIA | `LRA | `LIA | `BV | `Other ]
 
 module type T = sig
     include Game.T
