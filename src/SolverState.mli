@@ -2,8 +2,7 @@
 
 open Containers
 open Ext
-
-type logic = [ `NRA | `NIA | `LRA | `LIA | `BV | `Other ]
+open Utils
 
 module type T = sig
     include Game.T

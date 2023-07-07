@@ -149,11 +149,11 @@ let rec process config ~logic ~rigidintro ~rigid ~intro body : t WithEpsilonsMon
              let open WithEpsilons in
              match logic with
              | `BV ->
-                ListWithEpsilons.map
+                SeqWithEpsilons.map
                   (IC.weaken_existentials intro_sub)
-                  Seq.(append SubGame.existentials SubGame.universals |> to_list)
+                  Seq.(append SubGame.existentials SubGame.universals)
                   epsilons
-             | _ -> return []
+             | _ -> return Seq.nil
            in
            
            let foralls = newforall::state.foralls in
@@ -162,7 +162,7 @@ let rec process config ~logic ~rigidintro ~rigid ~intro body : t WithEpsilonsMon
              Seq.(append SubGame.existentials (cons existential state.existentials))
            in
            let universals   =
-             Seq.(cons
+             Seq.(append
                     projection
                     (append SubGame.universals (cons universal state.universals)))
            in

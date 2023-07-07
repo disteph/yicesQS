@@ -50,6 +50,27 @@ end
 
 module ListWithEpsilons = Yices2.Common.MList(WithEpsilonsMonad)
 
+module MSeq(M : Monad) = struct
+  open M
+  let (let++) = bind
+              
+  let fold  (aux : 'a -> 'b -> 'a M.t) =
+    let aux sofar c =
+      let++ sofar = sofar in
+      aux sofar c
+    in
+    Seq.fold_left aux
+
+  let map f l =
+    let aux sofar c =
+      let++ c = f c in
+      return(Seq.(append sofar (singleton c)))
+    in
+    fold aux (return Seq.nil) l
+end
+
+module SeqWithEpsilons = MSeq(WithEpsilonsMonad)
+
 let rec get_disjuncts t =
   let open Term in
   match reveal t with

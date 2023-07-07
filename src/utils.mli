@@ -37,7 +37,15 @@ module ListWithEpsilons : sig
   val map :
     ('a -> 'b WithEpsilonsMonad.t) -> 'a list -> 'b list WithEpsilonsMonad.t
 end
-     
+
+module SeqWithEpsilons : sig
+  val fold :
+    ('a -> 'b -> 'a WithEpsilonsMonad.t) ->
+    'a WithEpsilonsMonad.t -> 'b Seq.t -> 'a WithEpsilonsMonad.t
+  val map :
+    ('a -> 'b WithEpsilonsMonad.t) -> 'a Seq.t -> 'b Seq.t WithEpsilonsMonad.t
+end
+
 module CLL : sig
 
   (** In a costed lazy list, each lazy list element is a pair:

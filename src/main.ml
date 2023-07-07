@@ -82,9 +82,10 @@ match !args with
      in
      traces |> if_filedump;
    with
-
+     
    | BadInterpolant(state, level, interpolant) as exc ->
-     let subdir = "bad_interpolant" in
+      print_endline "KK";
+      let subdir = "bad_interpolant" in
      copyNtrace              filename subdir state |> if_filedump;
      print_trace_with_assert filename subdir ~suffix:"interpolant_check" state interpolant |> if_filedump;
      Format.(fprintf stdout) "Interpolant at level %i:@,@[<v>%a@]@," level.id Term.pp interpolant;
@@ -92,6 +93,7 @@ match !args with
      raise exc
 
    | BadUnder(state, level, under) as exc ->
+      print_endline "KK2";
      let subdir = "bad_under" in
      copyNtrace              filename subdir state |> if_filedump;
      print_trace_with_assert filename subdir ~suffix:"under_check" state under |> if_filedump;
@@ -100,11 +102,13 @@ match !args with
      raise exc
 
    | WrongAnswer(state, answer) as exc ->
+      print_endline "KK3";
      copyNtrace filename "wrong" state |> if_filedump;
      Format.(fprintf stdout) "@[Wrong answer!: %a@]@]%!" pp_answer answer;
      raise exc
 
    | FromYicesException(state, level, report, bcktrace) as exc ->
+      print_endline "KK4";
      copyNtrace filename "yices_exc" state |> if_filedump;
      Format.(fprintf stdout) "@[Yices error at level %i: @[%s@]@]@,"
        level.id
@@ -115,13 +119,15 @@ match !args with
      raise exc
 
    | Yices2.SMT2.Yices_SMT2_exception s as exc ->
+      print_endline "KK5";
      copy_input filename "SMT_exc" |> if_filedump;
      Format.(fprintf stdout) "@[SMT2 error: %s@]@," s;
      Format.(fprintf stdout) "Backtrace is:@,@[%s@]@]%!" (Printexc.get_backtrace());
      raise exc
 
    | Yices2.High.ExceptionsErrorHandling.YicesException(_,report) as exc ->
-      let bcktrace = Printexc.get_backtrace() in
+           print_endline "KK6";
+ let bcktrace = Printexc.get_backtrace() in
       Format.(fprintf stdout) "@[Yices error: @[%s@]@]@," (ErrorPrint.string());
       Format.(fprintf stdout) "@[Error report:@,@[<v2>  %a@]@,"
         Types.pp_error_report report;
