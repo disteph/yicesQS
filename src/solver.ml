@@ -322,7 +322,13 @@ let return _state answer _expected =
   | Sat _ -> "sat"
 [%%endif]
 
-  
+
+[%%if debug_mode]
+let setmode config = Config.set config ~name:"mode" ~value:"push-pop"
+[%%else]
+let setmode config = Config.set config ~name:"mode" ~value:"multi-checks"
+[%%endif]
+
 let treat filename =
   let sexps = SMT2.load_file filename in
   let set_logic logic config =
@@ -333,7 +339,7 @@ let treat filename =
         Config.set config ~name:"solver-type" ~value:"mcsat";
         Config.set config ~name:"model-interpolation" ~value:"true";
       end;
-    Config.set config ~name:"mode" ~value:"multi-checks"
+    setmode config
   in
   let session    = Session.create ~set_logic 0 in
   let support    = ref [] in
