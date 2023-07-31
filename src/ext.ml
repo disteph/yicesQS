@@ -2,6 +2,8 @@
 
 open Yices2.Ext
 
+module Types = Types
+
 [%%if debug_mode]
 
 module ErrorHandling = ExceptionsErrorHandling

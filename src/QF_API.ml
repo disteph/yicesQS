@@ -1,6 +1,5 @@
 open! Containers
 
-open Yices2.Ext
 open Ext
 
 open Utils
