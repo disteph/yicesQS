@@ -77,7 +77,7 @@ let rec solve state level model support : answer*SolverState.t =
     let open S in
     print 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
       Level.pp level
-      (SModel.pp()) { model; support = Support.list support };
+      (SModel.pp()) (SModel{ model; support = Support.list support });
 
     print 4 "@[Trying to solve over-approximations@]@,";
     let status =
@@ -99,10 +99,10 @@ let rec solve state level model support : answer*SolverState.t =
       answer, state
 
     | `STATUS_SAT ->
-      let SModel.{ model; _ } = Context.get_model context ~keep_subst:true in
+      let SModel{ model; _ } = Context.get_model context ~keep_subst:true in
       print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         (SModel.pp())
-        SModel.{support = List.append level.newvars (Support.list support); model };
+        (SModel{support = List.append level.newvars (Support.list support); model });
       post_process state level model support
 
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
@@ -209,7 +209,7 @@ and treat_sat state level model support =
         (* This should always work *)
         assert(Types.equal_smt_status status `STATUS_SAT);
         (* This is the extended model *)
-        let SModel.{ model = recurs_model ; _} =
+        let SModel{ model = recurs_model ; _} =
           Context.get_model o.selector_context ~keep_subst:true
         in
         solve state o.sublevel recurs_model recurs_support, recurs_model
@@ -251,10 +251,10 @@ and treat_sat state level model support =
               List.sorted_merge_uniq ~cmp:Term.compare var_that_matter cumulated_support
             in
             print 4 "@[Now checking whether our model %a violates anything we have learnt@]@,"
-              (SModel.pp ()) { model; support = cumulated_support };
+              (SModel.pp ()) (SModel{ model; support = cumulated_support });
             match Context.check context ~smodel:(SModel.make model ~support:cumulated_support) with
             | `STATUS_SAT  ->
-               let SModel.{ model; _ } = 
+               let SModel{ model; _ } = 
                  Context.get_model context ~keep_subst:true
                in
                next cumulated_support model
@@ -353,7 +353,7 @@ let treat filename =
           let formula = ParseTerm.parse env formula |> Yices2.SMT2.Cont.get in
           (* print 2 "@[<2>Asserting formula@,%a@]@," Term.pp formula; *)
           (match env.model with
-           | Some { model; _ } -> Model.free model
+           | Some(SModel{ model; _ }) -> Model.free model
            | None -> ());
           assertions := formula::!assertions
 

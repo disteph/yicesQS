@@ -92,7 +92,7 @@ let getInversePoly
   in
   aux [] l
 
-let reduce_sign_ext (ExtTerm.Block{ block; sign_ext; zero_ext } as b) =
+let reduce_sign_ext (Types.Block{ block; sign_ext; zero_ext } as b) =
   let open ExtTerm in
   if sign_ext = 0 then b
   else
@@ -102,7 +102,7 @@ let reduce_sign_ext (ExtTerm.Block{ block; sign_ext; zero_ext } as b) =
     let term1 = Term.BV.(zero_extend (bvadd block min) sign_ext) in
     let term2 = Term.BV.(zero_extend              min  sign_ext) in
     let term  = Term.BV.bvsub term1 term2 in
-    Block{ block = Slice(BoolStruct.Leaf(Slice.build term)); sign_ext = 0; zero_ext }
+    Block{ block = SliceStruct(Leaf(Slice.build term)); sign_ext = 0; zero_ext }
 
 (* Solves concat(...,e_i,...) = t) in x
    It produces a list of pairs (e_i, t_i) such that
@@ -112,7 +112,7 @@ let reduce_sign_ext (ExtTerm.Block{ block; sign_ext; zero_ext } as b) =
 
 let getInverseConcat (x : Term.t) (t : Term.t) (concat : _ ExtTerm.block list)
     : (ExtTerm.t * Term.t) list =
-  let open ExtTerm in
+  let open Types in
   let rec aux start_index = function
     | [] -> [] (* x did not appear in a nice place *)
 
@@ -120,7 +120,7 @@ let getInverseConcat (x : Term.t) (t : Term.t) (concat : _ ExtTerm.block list)
       print 6 "@[<2>getInverseConcat finds block of bits %a@]@," ExtTerm.pp b;
       aux (start_index + ExtTerm.width b) tail
 
-    | Block{ block = Slice _ as block; sign_ext; zero_ext } as b :: tail ->
+    | Block{ block = SliceStruct _ as block; sign_ext; zero_ext } as b :: tail ->
       let width = ExtTerm.width b in
       print 6 "@[<2>getInverseConcat finds block of slice %a@]@," ExtTerm.pp b;
       if ExtTerm.is_free ~var:x b
@@ -185,11 +185,9 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
     | _ -> true
   in
   let conjuncts_disjuncts l =
-    let open BoolStruct in
-    let open Slice in
     let aux sofar = function
-      | Leaf{extractee; indices = None} when Term.equal extractee var -> sofar
-      | a -> (ExtTerm.to_term(Slice a))::sofar
+      | Leaf(Slice{extractee; indices = None}) when Term.equal extractee var -> sofar
+      | a -> (ExtTerm.to_term(SliceStruct a))::sofar
     in
     List.fold_left aux [] l
   in
@@ -229,7 +227,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
   | `YICES_EQ_TERM -> (* Table 2 *)
     begin
       match uneval with
-      | ExtTerm.TermStruct l ->
+      | TermStruct l ->
         begin
           match l with
           | A0(_,e) when equal var e ->  (* Not actually given in the paper, just obvious *)
@@ -354,32 +352,32 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           | _ -> raise NotImplemented
         end
 
-      | ExtTerm.Slice(Leaf{ extractee = _; indices = _ }) -> (* Not in tables, but obvious *)
+      | SliceStruct(Leaf(Slice{ extractee = _; indices = _ })) -> (* Not in tables, but obvious *)
         true0(), None
 
-      | ExtTerm.Slice(And l) ->
+      | SliceStruct(And l) ->
         let s = conjuncts_disjuncts l in
         if polarity
         then (bvand (t::s)) === t, Some t
         else
           (bvand s =/= zero) ||| (t =/= zero), Some(bvnot t)
 
-      | ExtTerm.Slice(Or l) ->
+      | SliceStruct(Or l) ->
         let s = conjuncts_disjuncts l in
         if polarity
         then (bvor (t::s)) === t, Some t
         else
           (bvor s =/= zero_not) ||| (t =/= zero_not), Some(bvnot t)
 
-      | ExtTerm.Slice(Not _l) -> assert false (* Should not have led to epsilon-terms *)
+      | SliceStruct(Not _l) -> assert false (* Should not have led to epsilon-terms *)
 
-      | ExtTerm.Concat _l ->
+      | Concat _l ->
         if polarity
         then assert false (* Should not have led to epsilon-terms *)
         else true0(), None
 
-      | ExtTerm.Block _ -> assert false (* We should have abandoned ship by now *)
-      | ExtTerm.Bits _ -> assert false (* We should have abandoned ship by now *)
+      | Block _ -> assert false (* We should have abandoned ship by now *)
+      | Bits _ -> assert false (* We should have abandoned ship by now *)
 
     end
     
@@ -393,7 +391,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
         else t =/= zero_not (* Column 3 *)
       in
       match uneval with
-      | ExtTerm.TermStruct l ->
+      | TermStruct l ->
         begin
           match l with
 
@@ -584,11 +582,11 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
 
         end
 
-      | ExtTerm.Slice(Not _)     (* Table 5 *)
-      | ExtTerm.Slice(Leaf _) -> (* Should be added to Table 5 *)
+      | SliceStruct(Not _)     (* Table 5 *)
+      | SliceStruct(Leaf _) -> (* Should be added to Table 5 *)
         cond(), None
 
-      | ExtTerm.Slice(And l) ->
+      | SliceStruct(And l) ->
         if polarity
         then (* Table 6 *)
           if uneval_left (* uneval >= eval *)
@@ -603,7 +601,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
           let s = conjuncts_disjuncts l |> bvand in
           bvlt t s, None
 
-      | ExtTerm.Slice(Or l) ->
+      | SliceStruct(Or l) ->
         if polarity
         then (* Table 6 *)
           if uneval_left (* uneval >= eval *)
@@ -620,10 +618,10 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
         else
           t =/= zero_not, None
 
-      | ExtTerm.Concat _l -> raise NotImplemented;
+      | Concat _l -> raise NotImplemented;
         
-      | ExtTerm.Block _ -> assert false (* We should have abandoned ship by now *)
-      | ExtTerm.Bits _ -> assert false (* We should have abandoned ship by now *)
+      | Block _ -> assert false (* We should have abandoned ship by now *)
+      | Bits _ -> assert false (* We should have abandoned ship by now *)
     end
 
   | `YICES_BV_SGE_ATOM ->
@@ -635,7 +633,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
       else t =/= maxs ~width (* Column 5 *)
     in
     match uneval with
-    | ExtTerm.TermStruct l ->
+    | TermStruct l ->
       begin
         match l with
 
@@ -849,11 +847,11 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
 
 
       end
-    | ExtTerm.Slice(Not _)     (* Table 5 *)
-    | ExtTerm.Slice(Leaf _) -> (* Should be added to Table 5 *)
+    | SliceStruct(Not _)     (* Table 5 *)
+    | SliceStruct(Leaf _) -> (* Should be added to Table 5 *)
       cond(), None
 
-    | ExtTerm.Slice(And l) ->
+    | SliceStruct(And l) ->
       let s = conjuncts_disjuncts l |> bvor in
       if polarity
       then (* Table 8 *)
@@ -865,7 +863,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
       then bvslt (bvand [bvnot(bvneg t); s]) t, None
       else bvslt t (bvand [s; maxs ~width]), None
 
-    | ExtTerm.Slice(Or l) ->
+    | SliceStruct(Or l) ->
       let s = conjuncts_disjuncts l |> bvor in
       if polarity
       then (* Table 8 *)
@@ -877,9 +875,9 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
       then bvslt (bvor [bvnot(bvsub s t); s]) t, None
       else bvslt t (bvor [s; maxs ~width]), None
 
-    | ExtTerm.Concat _ -> raise NotImplemented
-    | ExtTerm.Block _ -> assert false (* We should have abandoned ship by now *)
-    | ExtTerm.Bits _ -> assert false (* We should have abandoned ship by now *)
+    | Concat _ -> raise NotImplemented
+    | Block _ -> assert false (* We should have abandoned ship by now *)
+    | Bits _ -> assert false (* We should have abandoned ship by now *)
 
 
 (**************************)
@@ -1010,7 +1008,7 @@ let rec solve :
   let open ExtTerm in
   match uneval with
   | Bits _ as bits                   -> solve bits
-  | Slice _ as slice                 -> solve slice
+  | SliceStruct _ as slice           -> solve slice
   | Concat _ as l                    -> solve l
   | Block{block; sign_ext; zero_ext} -> solve (Block{block; sign_ext; zero_ext})
   | T e when not(Term.equal e x)     -> let YExtTerm a = of_term e in solve a
@@ -1084,7 +1082,7 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
     let open ExtTerm in
     match cons, a with (* We analyse the top-level predicate and its 1st argument e *)
 
-    | _, Slice(Leaf{ extractee; indices = None }) ->
+    | _, SliceStruct(Leaf(Slice{ extractee; indices = None })) ->
       treat (ExtTerm(T extractee)) t
 
     | _, (Block{ sign_ext; _ } as block) when sign_ext > 0 ->
@@ -1094,8 +1092,8 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
     | _, Block{ block; sign_ext = 0; zero_ext = 0 } ->
       treat (ExtTerm block) t
 
-    | `YICES_EQ_TERM, Slice(Not a) ->
-      treat (ExtTerm(Slice a)) (Term.BV.bvnot t)
+    | `YICES_EQ_TERM, SliceStruct(Not a) ->
+      treat (ExtTerm(SliceStruct a)) (Term.BV.bvnot t)
 
     | `YICES_EQ_TERM, Concat blocks when polarity ->
       getInverseConcat x t blocks |> recurs_call []
@@ -1125,17 +1123,17 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
           `Cons((modified,
                  Monad.{ variable = x' ; standing4 = ExtTerm e_i }), LazyList.empty)
         in
-        let return_slice  x' = Slice(BoolStruct.Leaf(Slice.build x')) in
+        let return_slice  x' = SliceStruct(Leaf(Slice.build x')) in
         let return_block  x' = return_slice x' |> return_block in
         let return_concat x' = return_block x' |> fun x -> Concat [x] in
         let variants : a closed Monad.variant LazyList.t = lazy(
           match e_i with
           | T _      when is_free ~var:x e_i -> let x' = fresh_var e_i in variant x' (T x')
-          | Slice _  when is_free ~var:x e_i -> let x' = fresh_var e_i in variant x' (return_slice x')
+          | SliceStruct _  when is_free ~var:x e_i -> let x' = fresh_var e_i in variant x' (return_slice x')
           | Block _  when is_free ~var:x e_i -> let x' = fresh_var e_i in variant x' (return_block x')
           | Concat _ when is_free ~var:x e_i -> let x' = fresh_var e_i in variant x' (return_concat x')
           | Bits _
-          | T _ | Slice _ | Block _ | Concat _ -> `Nil
+          | T _ | SliceStruct _ | Block _ | Concat _ -> `Nil
         )
         in
         Monad.{ original = e_i; variants }
@@ -1192,21 +1190,21 @@ let solve_atom
               else Term.Arith.sub t e, Term.Arith.zero()
             in
             solve x `YICES_EQ_TERM
-              ~uneval:(ExtTerm.T uneval) ~eval ~uneval_left:true ~polarity
+              ~uneval:(T uneval) ~eval ~uneval_left:true ~polarity
               [] false
          | _ ->
             print 6 "@[<2>Present on both sides, and is not bv or arith@]@,";
-            solve x cons ~uneval:(ExtTerm.T e) ~eval:t ~uneval_left:true ~polarity
+            solve x cons ~uneval:(T e) ~eval:t ~uneval_left:true ~polarity
               [] false
             ||>
-              solve x cons ~uneval:(ExtTerm.T t) ~eval:e ~uneval_left:false ~polarity
+              solve x cons ~uneval:(T t) ~eval:e ~uneval_left:false ~polarity
                 [] false
        else
          (print 6 "@[<2>Present on rhs only@]@,";
-          solve x cons ~uneval:(ExtTerm.T t) ~eval:e ~uneval_left:false ~polarity [] false)
+          solve x cons ~uneval:(T t) ~eval:e ~uneval_left:false ~polarity [] false)
      else
        (print 6 "@[<2>Present on lhs only@]@,";
-        solve x cons ~uneval:(ExtTerm.T e) ~eval:t ~uneval_left:true ~polarity [] false)
+        solve x cons ~uneval:(T e) ~eval:t ~uneval_left:true ~polarity [] false)
   | _ ->
      Format.(fprintf stdout) "wrong predicate in solve_atom: %a" Term.pp (Term.build atom);
      assert false
