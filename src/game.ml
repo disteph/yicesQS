@@ -142,7 +142,7 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
            (* The selector is just a way to assert the Look-ahead Formula of the subgame
               Technically we just need (selector ==> SubGame.ground),
               but experiments show slightly better results with ===; who knows why... *)
-           let universal   = Term.(selector === SubGame.ground) in
+           let universal   = Term.(selector ==> SubGame.ground) in
            fun state ->
            print "process" 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
            let newvars = SubGame.top_level.newvars @ (name::selector::state.newvars) in
