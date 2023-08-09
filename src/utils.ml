@@ -3,12 +3,11 @@
 open Containers
 
 open Ext
-       
+
 [%%if debug_mode]
-open Command_options
-let print i fs = Format.((if !verbosity >= i then fprintf else ifprintf) stdout) fs
+let print trace = Tracing.print Format.stdout trace
 [%%else]
-let print _ fs = Format.(ifprintf stdout) fs
+let print trace = Tracing.iprint Format.stdout trace
 [%%endif]
 
 let pp_space fmt () = Format.fprintf fmt " @,"

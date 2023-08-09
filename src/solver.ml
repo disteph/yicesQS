@@ -41,17 +41,17 @@ exception WrongAnswer        of SolverState.t * answer
 
 let check state level model support reason =
   let (module S:SolverState.T) = state in
-  print 3 "@[<v2>Checking that our model %a@,satisfies reason %a@]@,"
-    (SModel.pp()) { model; support }
+  print "check" 3 "@[<v2>Checking that our model %a@,satisfies reason %a@]@,"
+    (SModel.pp()) (SModel{ model; support })
     Term.pp reason;
   Context.push S.epsilons_context;
   Context.assert_formula S.epsilons_context (Term.not1 reason);
   match Context.check S.epsilons_context ~smodel:(SModel.make model ~support) with
   | `STATUS_SAT   ->
-    print 3 "@[<v2>It does not satisfy it@]@,";
+    print "check" 3 "@[<v2>It does not satisfy it@]@,";
     raise (BadUnder(state, level, reason))
   | `STATUS_UNSAT ->
-    print 3 "@[<v2>It does satisfy it@]@,";
+    print "check" 3 "@[<v2>It does satisfy it@]@,";
     Context.pop S.epsilons_context
   | _ -> assert false
 
@@ -75,15 +75,15 @@ let rec solve state level model support : answer*SolverState.t =
   try
     let (module S:SolverState.T) = state in
     let open S in
-    print 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
+    print "solve" 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
       Level.pp level
       (SModel.pp()) (SModel{ model; support = Support.list support });
 
-    print 4 "@[Trying to solve over-approximations@]@,";
+    print "solve" 4 "@[Trying to solve over-approximations@]@,";
     let status =
       match support with
-      | Empty -> print 0 "."; Context.check context
-      | S _   -> print 0 "."; Context.check context
+      | Empty -> print "solve" 0 ".%i%!" level.id; Context.check context
+      | S _   -> print "solve" 0 ".%i" level.id; Context.check context
                                 ~smodel:(SModel.make model ~support:(Support.list support))
     in
     match status with
@@ -95,12 +95,13 @@ let rec solve state level model support : answer*SolverState.t =
       in
       check_interpolant state level model interpolant context;
       let answer = Unsat Term.(not1 interpolant) in
-      print 3 "@[<2>Level %i answer on that model is@ @[%a@]@]" level.id pp_answer answer;
+      print "solve" 3 "@[<2>Level %i answer on that model is@ @[%a@]@]"
+        level.id pp_answer answer;
       answer, state
 
     | `STATUS_SAT ->
       let SModel{ model; _ } = Context.get_model context ~keep_subst:true in
-      print 4 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
+      print "model" 0 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,"
         (SModel.pp())
         (SModel{support = List.append level.newvars (Support.list support); model });
       post_process state level model support
@@ -112,9 +113,9 @@ let rec solve state level model support : answer*SolverState.t =
     raise (FromYicesException(state, level,report, Printexc.get_backtrace()))
 
 and post_process state level model support =
-  print 1 "@[<v 1> ";
+  print "indent" 0 "@[<v 1> ";
   let result = treat_sat state level model support in
-  print 1 "@]@,";
+  print "indent" 0 "@]@,%!";
   match result with
   | Some underapprox -> Sat underapprox, state
   | None -> solve state level model support
@@ -133,11 +134,11 @@ and treat_sat state level model support =
       (* We first aggregate the reasons why our model worked *)
       (* Any model satisfying true_of_model would have been a good model *)
       let true_of_model = Term.andN reasons in
-      print 4 "@[<2>true of model is@ @[<v>%a@]@]@," Term.pp true_of_model;
+      print "solve" 4 "@[<2>true of model is@ @[<v>%a@]@]@," Term.pp true_of_model;
       (* Now compute several projections of the reason on the rigid variables *)
       let seq =
-        print 1 "@,Sent for generalization:@, %a@," Term.pp true_of_model;
-        (* print 0 "@,%a" (List.pp Term.pp) Level.(level.newvars); *)
+        print "solve" 1 "@,Sent for generalization:@, %a@," Term.pp true_of_model;
+        (* print "solve" 0 "@,%a" (List.pp Term.pp) Level.(level.newvars); *)
         QF_API.generalize_model
           ~logic:S.logic
           model
@@ -161,9 +162,9 @@ and treat_sat state level model support =
             | _::_, _::_   -> extract accu epsilons (n-1) tail
       in
       let WithEpsilons.{ main = underapprox; epsilons } = extract [] [] !underapprox seq in
-      print 1 "@,After generalization@, %a@," (List.pp Term.pp) underapprox;
+      print "solve" 1 "@,After generalization@, %a@," (List.pp Term.pp) underapprox;
       SolverState.record_epsilons state epsilons;
-      print 3 "@[<v2>Level %i model works, with %i reason(s)@,@[<v2>  %a@]@]@,"
+      print "solve" 3 "@[<v2>Level %i model works, with %i reason(s)@,@[<v2>  %a@]@]@,"
         level.id
         (List.length underapprox)
         (List.pp Term.pp) underapprox;
@@ -172,7 +173,7 @@ and treat_sat state level model support =
     (* Here we have a forall formula o that is false in the model;
        the reason why we don't have to look at it is that o is false in the model. *)
     | Seq.Cons(o, opponents) when not (Model.get_bool_value model Level.(o.name)) ->
-      print 4 "@[Level %i does not need to be looked at as %a is false@]@,"
+      print "solve" 4 "@[Level %i does not need to be looked at as %a is false@]@,"
         o.sublevel.id
         Term.pp o.name;
       aux model
@@ -183,7 +184,7 @@ and treat_sat state level model support =
     (* Here we have a forall formula o that is true in the model;
        we have to make a recursive call to play the corresponding sub-game *)
     | Seq.Cons(o, opponents) ->
-      print 4 "@[Level %i needs to be looked at as %a is true@]@,"
+      print "solve" 4 "@[Level %i needs to be looked at as %a is true@]@,"
         o.sublevel.id
         Term.pp o.name;
 
@@ -197,7 +198,7 @@ and treat_sat state level model support =
       let recurs_status, _recurs_model =
         (* if Model.get_bool_value model o.selector
          * then (\* The selector for this subformula is already true *\)
-         *   (print 4 "@[Model already makes %a true, we stick to the same model@]@,"
+         *   (print "solve" 4 "@[Model already makes %a true, we stick to the same model@]@,"
          *      Term.pp o.selector;
          *    post_process state o.sublevel model recurs_support, model)
          * else *)
@@ -221,14 +222,14 @@ and treat_sat state level model support =
       match recurs_status |> fst with
       | Unsat reason ->
         begin
-          print 1 "@,";
-          print 4 "@[<v2>Back to level %i, we see from level %i answer Unsat with reason@,@[%a@]@]@,"
+          print "solve" 1 "@,";
+          print "solve" 4 "@[<v2>Back to level %i, we see from level %i answer Unsat with reason@,@[%a@]@]@,"
             level.id
             o.sublevel.id
             Term.pp reason;
           (* We first eliminate the trigger from the reason... *)
           let reason = elim_trigger reason in
-          print 4 "@[Reason's projection is %a@]@," Term.pp reason;
+          print "solve" 4 "@[Reason's projection is %a@]@," Term.pp reason;
           (* ...and check that our current model indeed satisfies it. *)
           check state level model o.sublevel.rigid reason;
           (* next moves on to the next opponent;
@@ -250,21 +251,22 @@ and treat_sat state level model support =
             let cumulated_support =
               List.sorted_merge_uniq ~cmp:Term.compare var_that_matter cumulated_support
             in
-            print 4 "@[Now checking whether our model %a violates anything we have learnt@]@,"
+            print "solve" 4
+              "@[Now checking whether our model %a violates anything we have learnt@]@,"
               (SModel.pp ()) (SModel{ model; support = cumulated_support });
-            match Context.check context ~smodel:(SModel.make model ~support:cumulated_support) with
+            match
+              Context.check context ~smodel:(SModel.make model ~support:cumulated_support)
+            with
             | `STATUS_SAT  ->
-               let SModel{ model; _ } = 
-                 Context.get_model context ~keep_subst:true
-               in
+               let SModel{ model; _ } = Context.get_model context ~keep_subst:true in
                next cumulated_support model
             | `STATUS_UNSAT -> 
-              print 4 "@[We learned something that defeats this model@]@,";
+              print "solve" 4 "@[We learned something that defeats this model@]@,";
               None
             | _             -> assert false
         end
       | Sat reasons ->
-        print 4 "@[<v2>Back to level %i, we see from level %i answer Sat with reasons@,@[%a@]@]@,"
+        print "solve" 4 "@[<v2>Back to level %i, we see from level %i answer Sat with reasons@,@[%a@]@]@,"
           level.id
           o.sublevel.id
           (List.pp Term.pp) reasons;
@@ -312,8 +314,9 @@ let setmode config = Config.set config ~name:"mode" ~value:"multi-checks"
 let treat filename =
   let sexps = SMT2.load_file filename in
   let set_logic logic config =
-    print 3 "@[Setting logic to %s@]@," logic;
-    if not(String.equal "BV" logic)
+    print "treat" 3 "@[Setting logic to %s@]@," logic;
+    if (Option.get_or ~default:`CDCLT !Command_options.ysolver |> function `MCSAT -> true | `CDCLT -> false)
+       || not(String.equal "BV" logic)
     then
       begin 
         Config.set config ~name:"solver-type" ~value:"mcsat";
@@ -329,7 +332,7 @@ let treat filename =
   let treat sexp =
     match sexp with
     | List(Atom head::args) ->
-      print 1 "@[<2>Traversing sexp@ %a@]@," pp_sexp sexp;
+      print "treat" 1 "@[<2>Traversing sexp@ %a@]@," pp_sexp sexp;
       begin
         match head, args, !(session.env) with
         | "set-info",   [Atom ":status"; Atom "sat"],   _ ->
@@ -346,12 +349,12 @@ let treat filename =
           let ytype = ParseType.parse env.types typ |> Yices2.SMT2.Cont.get in
           let yvar = Term.new_uninterpreted ~name ytype in
           support := yvar :: !support;
-          (* print 2 "@[<2>  declared fun/cst is %a@]@," Term.pp yvar; *)
+          (* print "treat" 2 "@[<2>  declared fun/cst is %a@]@," Term.pp yvar; *)
           Variables.permanently_add env.variables name yvar
 
         | "assert", [formula], Some env ->
           let formula = ParseTerm.parse env formula |> Yices2.SMT2.Cont.get in
-          (* print 2 "@[<2>Asserting formula@,%a@]@," Term.pp formula; *)
+          (* print "treat" 2 "@[<2>Asserting formula@,%a@]@," Term.pp formula; *)
           (match env.model with
            | Some(SModel{ model; _ }) -> Model.free model
            | None -> ());
@@ -359,24 +362,24 @@ let treat filename =
 
         | "check-sat", [], Some env ->
           let formula = Term.(andN !assertions) in
-          print 2 "@[<v 2>@[Computing game@]@,";
+          print "treat" 2 "@[<v 2>@[Computing game@]@,";
           let (module G) as game =
             Game.process session.config ~global_vars:!support formula
           in
-          print 3 "@[<v 1>Computed game is:@,@[%a@]@]@," Game.pp game;
-          print 2 "@]@,";
+          print "treat" 3 "@[<v 1>Computed game is:@,@[%a@]@]@," Game.pp game;
+          print "treat" 2 "@]@,";
           let state = SolverState.create ~logic:env.logic session.config game in
-          print 1 "@[<v>";
+          print "treat" 1 "@[<v>";
           let answer, state = solve state G.top_level (Model.from_map []) Support.Empty in
-          print 1 "@]@,";
+          print "treat" 1 "@]@,";
           let str = return state answer !expected in
           Format.(fprintf stdout) "@[%s@]@," str;
           states := state::!states;
           (* SolverState.free initial_state; *)
-          print 3 "@[Game freed@]@,";
+          print "treat" 3 "@[Game freed@]@,";
 
         | "exit", [], _ ->
-          print 1 "@[Exiting@]@,"; ()
+          print "treat" 1 "@[Exiting@]@,"; ()
           (* Session.exit session *)
 
         | _ -> ParseInstruction.parse session sexp
@@ -385,5 +388,5 @@ let treat filename =
     | _ -> ParseInstruction.parse session sexp
   in
   List.iter treat sexps;
-  print 1 "@[Exited gracefully@]@,";
+  print "treat" 1 "@[Exited gracefully@]@,";
   !states

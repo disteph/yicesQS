@@ -8,7 +8,7 @@ open Command_options
 let () = assert(Global.has_mcsat())
 
 let if_filedump f = 
-  match !filedump with
+  match Tracing.filedump() with
   | None -> ()
   | Some prefix -> f prefix
   
@@ -61,13 +61,17 @@ open Arg
 let args = ref []
 let description = "QE in Yices"
 
+let force_fail() =
+  if Option.is_some !ysolver then failwith "Trying to force solver more than once."
+  
 let options = [
-  ("-verb",     Int(fun i -> verbosity := i), "Verbosity level (default is 0)");
   ("-under",    Int(fun u -> underapprox := u), "Desired number of underapproximations in SAT answers (default is 1)");
-  ("-filedump", String(fun s -> filedump := Some s), "Dump file in case of error: if so, give path prefix (default is no file dump)");
-];;
+  ("-mcsat",    Unit(fun () -> force_fail(); ysolver := Some `MCSAT), "Forces usage of MCSAT");
+  ("-cdclT",    Unit(fun () -> force_fail(); ysolver := Some `CDCLT), "Forces usage of CDCL(T)");
+]@Tracing.options;;
 
 Arg.parse options (fun a->args := a::!args) description;;
+Tracing.compile();;
 
 match !args with
 | [filename] ->

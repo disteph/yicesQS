@@ -79,11 +79,11 @@ let epsilon_assert _ _ = ()
 
 let learn (module S : T) lemmas =
   (* learnt := List.append lemma !S.learnt; *)
-  print 4 "@[<2>Learning %a@]@," (List.pp Term.pp) lemmas;
+  print "learn" 0 "@[<2>Learning %a@]@," (List.pp Term.pp) lemmas;
   Context.assert_formulas S.context lemmas
 
 let record_epsilons ((module S : T) as state) epsilons =
-  print 3 "@[<v2>Recording epsilons @[<v2>  %a@]@]@,"
+  print "record_epsilons" 3 "@[<v2>Recording epsilons @[<v2>  %a@]@]@,"
     (List.pp Term.pp) epsilons;
   epsilon_assert state epsilons;
   learn state epsilons

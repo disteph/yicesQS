@@ -144,7 +144,7 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
               but experiments show slightly better results with ===; who knows why... *)
            let universal   = Term.(selector === SubGame.ground) in
            fun state ->
-           print 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
+           print "process" 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
            let newvars = SubGame.top_level.newvars @ (name::selector::state.newvars) in
            let foralls = newforall::state.foralls in
            let existentials =
@@ -160,7 +160,7 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
     | _ ->
        let+ x = map aux a in return(Term.build x)
   in
-  print 5 "@[<v2>Traversing term@,%a@]@," Term.pp body;
+  print "process" 5 "@[<v2>Traversing term@,%a@]@," Term.pp body;
   let id = !counter in
   let state = { newvars = intro;
                 foralls      = [];
