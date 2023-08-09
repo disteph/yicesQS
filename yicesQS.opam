@@ -13,6 +13,7 @@ depends: [
   "dune" {build}
   "ocamlfind" {build}
   "containers"  {>= "3.0.0"}
+  "tracing"
   "yices2_bindings"
 ]
 build: [
