@@ -107,7 +107,8 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
       print "model" 0 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,%!"
         (SModel.pp())
         (SModel{support = List.append level.newvars (Support.list support); model });
-      post_process state level model support
+
+      post_process ~compute_over state level model support
 
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
@@ -115,7 +116,7 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
     ExceptionsErrorHandling.YicesException(_,report) ->
     raise (FromYicesException(state, level,report, Printexc.get_backtrace()))
 
-and post_process state level model support =
+and post_process ~compute_over state level model support =
   print "indent" 0 "@[<v 1> ";
   let result = treat_sat state level model support in
   print "indent" 0 "@]@,%!";
@@ -125,7 +126,8 @@ and post_process state level model support =
      then print "disabled" 0 "@[No underapproximation@]@,"
      else print "disabled" 0 "@[Underapproximation@]@,";
      Sat underapprox, state
-  | None -> solve state level model support
+
+  | None -> (solve[@tailcall]) ~compute_over state level model support
 
 and treat_sat state level model support =
   let (module S:SolverState.T) = state in
