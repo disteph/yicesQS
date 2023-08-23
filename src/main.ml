@@ -66,6 +66,7 @@ let force_fail() =
   
 let options = [
   ("-under",    Int(fun u -> underapprox := u), "Desired number of underapproximations in SAT answers (default is 1)");
+  ("-rounds",   Int(fun u -> rounds := u), "Desired number of SAT rounds per recursive call (default is 1)");
   ("-mcsat",    Unit(fun () -> force_fail(); ysolver := Some `MCSAT), "Forces usage of MCSAT");
   ("-cdclT",    Unit(fun () -> force_fail(); ysolver := Some `CDCLT), "Forces usage of CDCL(T)");
 ]@Tracing.options;;

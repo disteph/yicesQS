@@ -70,8 +70,19 @@ let check_interpolant _state _level _model _interpolant _context = ()
 
 [%%endif]
 
+type multi_round = {
+    remaining_rounds : int; (* #remaining rounds after this one *)
+    blocking    : Term.t list; (* Extra constraint to satisfy to block previous models *)
+    underapprox : Term.t list  (* Under-approximations from previously found models *)
+  }
 
-let rec solve ?(compute_over=true) state level model support : answer*SolverState.t =
+let multi_round() = {
+    remaining_rounds = !Command_options.rounds-1;
+    blocking         = [];
+    underapprox      = []
+  }
+  
+let rec solve ?(compute_over=true) ?(multi_round=multi_round()) state level model support : answer*SolverState.t =
   try
     let (module S:SolverState.T) = state in
     let open S in
@@ -83,32 +94,48 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
     let status =
       match support with
       | Empty -> print "solve" 0 ".%i%!" level.id; Context.check context
-      | S _   -> print "solve" 0 ".%i" level.id; Context.check context
-                                ~smodel:(SModel.make model ~support:(Support.list support))
+      | S _   ->
+
+         print "solve" 0 ".%i" level.id;
+         (* print "solve" 0 "@,@[<v>%a@]@," (List.pp Term.pp) multi_round.blocking; *)
+         Context.check
+           context
+           ~assumptions:multi_round.blocking
+           ~smodel:(SModel.make model ~support:(Support.list support))
     in
     match status with
 
     | `STATUS_UNSAT ->
-      let interpolant = match support with
-        | S _ when compute_over ->
-           print "disabled" 0 "@[Overapproximation@]@,";
-           let interpolant = Context.get_model_interpolant context in
-           check_interpolant state level model interpolant context;
-           Term.(not1 interpolant)
-        | _ -> print "disabled" 0 "@[No overapproximation@]@,"; Term.true0()
-      in
-      let answer = Unsat interpolant in
-      print "solve" 3 "@[<2>Level %i answer on that model is@ @[%a@]@]"
-        level.id pp_answer answer;
-      answer, state
+
+       print "model" 0 "@[UNSAT@]@,%!";
+       begin
+         match multi_round.underapprox with
+         | [] -> 
+            let interpolant = match support with
+              | S _ when compute_over ->
+                 print "disabled" 0 "@[Overapproximation@]@,";
+                 let interpolant = Context.get_model_interpolant context in
+                 check_interpolant state level model interpolant context;
+                 Term.(not1 interpolant)
+              | _ -> print "disabled" 0 "@[No overapproximation@]@,"; Term.true0()
+            in
+            let answer = Unsat interpolant in
+            print "solve" 3 "@[<2>Level %i answer on that model is@ @[%a@]@]"
+              level.id pp_answer answer;
+            answer, state
+
+         | underapprox -> 
+            Sat underapprox, state
+       end
 
     | `STATUS_SAT ->
-      let SModel{ model; _ } = Context.get_model context ~keep_subst:true in
-      print "model" 0 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,%!"
-        (SModel.pp())
-        (SModel{support = List.append level.newvars (Support.list support); model });
+       let SModel{ model; _ } = Context.get_model context ~keep_subst:true in
+       let long_support = List.append level.newvars (Support.list support) in
+       print "model" 0 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,%!"
+         (SModel.pp())
+         (SModel{support = List.append level.newvars (Support.list support); model });
 
-      post_process ~compute_over state level model support
+       post_process ~compute_over ~multi_round state level model support long_support
 
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
@@ -116,7 +143,7 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
     ExceptionsErrorHandling.YicesException(_,report) ->
     raise (FromYicesException(state, level,report, Printexc.get_backtrace()))
 
-and post_process ~compute_over state level model support =
+and post_process ~compute_over ~multi_round state level model support long_support =
   print "indent" 0 "@[<v 1> ";
   let result = treat_sat state level model support in
   print "indent" 0 "@]@,%!";
@@ -125,9 +152,25 @@ and post_process ~compute_over state level model support =
      if List.is_empty underapprox
      then print "disabled" 0 "@[No underapproximation@]@,"
      else print "disabled" 0 "@[Underapproximation@]@,";
-     Sat underapprox, state
 
-  | None -> (solve[@tailcall]) ~compute_over state level model support
+     if multi_round.remaining_rounds > 0
+     then
+       let blocking =
+         SModel.(make ~support:long_support model |> as_assumptions)
+         |> Term.andN
+         |> Term.not1
+       in
+       let multi_round = {
+           remaining_rounds = multi_round.remaining_rounds -1;
+           blocking    = blocking::multi_round.blocking;
+           underapprox = underapprox @ multi_round.underapprox
+         }
+       in
+       solve ~compute_over ~multi_round state level model support;
+     else
+       Sat underapprox, state
+
+  | None -> (solve[@tailcall]) ~compute_over ~multi_round state level model support
 
 and treat_sat state level model support =
   let (module S:SolverState.T) = state in
