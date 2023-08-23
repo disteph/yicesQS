@@ -115,7 +115,7 @@ let generalize_model ~logic model ~true_of_model ~rigid_vars ~newvars
          generalize_model model
            ~true_of_model:(WithEpsilons.return true_of_model) ~rigid_vars ~newvars
      end
-  | `BV ->
+  | `BV when !Command_options.bv_invert ->
      (* First, we try to eliminate as many variables as we can by invertibility conditions *)
      let ic = IC.solve_all newvars true_of_model in
      print "generalize_model" 3 "@[<v2>Formula sent to IC is %a@]@," Term.pp true_of_model;
