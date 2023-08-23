@@ -67,6 +67,7 @@ let force_fail() =
 let options = [
   ("-under",    Int(fun u -> underapprox := u), "Desired number of underapproximations in SAT answers (default is 1)");
   ("-rounds",   Int(fun u -> rounds := u), "Desired number of SAT rounds per recursive call (default is 1)");
+  ("-no_bv_invert", Clear bv_invert, "Disables invertibility conditions for BV (default is false, i.e. invertibility conditions are computed)");
   ("-mcsat",    Unit(fun () -> force_fail(); ysolver := Some `MCSAT), "Forces usage of MCSAT");
   ("-cdclT",    Unit(fun () -> force_fail(); ysolver := Some `CDCLT), "Forces usage of CDCL(T)");
 ]@Tracing.options;;
