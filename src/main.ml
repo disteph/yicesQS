@@ -49,7 +49,10 @@ let print_trace_with_assert filename subdir ?suffix ((module S : SolverState.T) 
     | _ -> assert false
   in
   let log = Context.to_sexp S.context |> aux in
-  let log = Action.(AssertFormula assertion |> to_sexp log) in 
+  let log =
+    Action.(ContextAction{ context_id = 0; context_action = AssertFormula assertion }
+            |> to_sexp log)
+  in 
   print_log filename subdir ?suffix state log prefix
 
 let copyNtrace filename subdir state prefix =

@@ -333,23 +333,9 @@ let setmode config = Config.set config ~name:"mode" ~value:"multi-checks"
 
 let treat filename =
   let sexps = SMT2.load_file filename in
-  let set_logic logic config =
-    print "treat" 3 "@[Setting logic to %s@]@," logic;
-    let mcsat =
-      match !Command_options.ysolver with
-      | Some `MCSAT -> true
-      | Some `CDCLT -> false
-      | None -> not(String.equal "BV" logic)
-    in
-    if mcsat
-    then
-      begin 
-        Config.set config ~name:"solver-type" ~value:"mcsat";
-        Config.set config ~name:"model-interpolation" ~value:"true"
-      end;
-    setmode config
-  in
-  let session    = Session.create ~set_logic 0 in
+  let session    = Session.create 0 in
+  let config     = ref None in
+  let logic      = ref "" in
   let support    = ref [] in
   let expected   = ref None in
   let assertions = ref [] in
@@ -359,51 +345,76 @@ let treat filename =
     | List(Atom head::args) ->
       print "treat" 1 "@[<2>Traversing sexp@ %a@]@," pp_sexp sexp;
       begin
-        match head, args, !(session.env) with
-        | "set-info",   [Atom ":status"; Atom "sat"],   _ ->
+        match head, args with
+        | "set-info",   [Atom ":status"; Atom "sat"] ->
           expected := Some true
 
-        | "set-info",   [Atom ":status"; Atom "unsat"],   _ ->
+        | "set-info",   [Atom ":status"; Atom "unsat"] ->
           expected := Some false
 
-        | "set-option", _, _ ->
+        | "set-option", _ ->
            ()
 
-        | "declare-fun", [Atom name; List []; typ], Some env
-        | "declare-const", [Atom name; typ], Some env ->
-          let ytype = ParseType.parse env.types typ |> Yices2.SMT2.Cont.get in
+        | "declare-fun", [Atom name; List []; typ]
+        | "declare-const", [Atom name; typ] ->
+          let ytype = ParseType.parse session.types typ |> Yices2.SMT2.Cont.get in
           let yvar = Term.new_uninterpreted ~name ytype in
           support := yvar :: !support;
           (* print "treat" 2 "@[<2>  declared fun/cst is %a@]@," Term.pp yvar; *)
-          Variables.permanently_add env.variables name yvar
+          Variables.permanently_add session.variables name yvar
 
-        | "assert", [formula], Some env ->
-          let formula = ParseTerm.parse env formula |> Yices2.SMT2.Cont.get in
-          (* print "treat" 2 "@[<2>Asserting formula@,%a@]@," Term.pp formula; *)
-          (match env.model with
+        | "assert", [formula] ->
+          let formula = ParseTerm.parse session formula |> Yices2.SMT2.Cont.get in
+          (match !(session.model) with
            | Some(SModel{ model; _ }) -> Model.free model
            | None -> ());
           assertions := formula::!assertions
 
-        | "check-sat", [], Some env ->
-          let formula = Term.(andN !assertions) in
-          print "treat" 2 "@[<v 2>@[Computing game@]@,";
-          let (module G) as game =
-            Game.process session.config ~global_vars:!support formula
-          in
-          print "treat" 3 "@[<v 1>Computed game is:@,@[%a@]@]@," Game.pp game;
-          print "treat" 2 "@]@,";
-          let state = SolverState.create ~logic:env.logic session.config game in
-          print "treat" 1 "@[<v>";
-          let answer, state = solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty in
-          print "treat" 1 "@]@,";
-          let str = return state answer !expected in
-          Format.(fprintf stdout) "@[%s@]@," str;
-          states := state::!states;
-          (* SolverState.free initial_state; *)
-          print "treat" 3 "@[Game freed@]@,";
+        | "set-logic",  [Atom l]            ->
+           let cfg = Config.malloc () in
+           print "treat" 3 "@[Setting logic to %s@]@," l;
+           let mcsat =
+             match !Command_options.ysolver with
+             | Some `MCSAT -> true
+             | Some `CDCLT -> false
+             | None -> not(String.equal "BV" l)
+           in
+           if mcsat
+           then
+             begin 
+               Config.set cfg ~name:"solver-type" ~value:"mcsat";
+               Config.set cfg ~name:"model-interpolation" ~value:"true"
+             end;
+           setmode cfg;
+           config := Some cfg;
+           logic  := l
+           
 
-        | "exit", [], _ ->
+        | "check-sat", [] ->
+           begin
+             match !config with
+             | None ->
+                raise (Yices2.SMT2.Yices_SMT2_exception "You need to have (set-logic ...) before (check-sat)")
+             | Some config ->
+                let formula = Term.(andN !assertions) in
+                print "treat" 2 "@[<v 2>@[Computing game@]@,";
+                let (module G) as game =
+                  Game.process config ~global_vars:!support formula
+                in
+                print "treat" 3 "@[<v 1>Computed game is:@,@[%a@]@]@," Game.pp game;
+                print "treat" 2 "@]@,";
+                let state = SolverState.create ~logic:!logic config game in
+                print "treat" 1 "@[<v>";
+                let answer, state = solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty in
+                print "treat" 1 "@]@,";
+                let str = return state answer !expected in
+                Format.(fprintf stdout) "@[%s@]@," str;
+                states := state::!states;
+                (* SolverState.free initial_state; *)
+                print "treat" 3 "@[Game freed@]@,";
+           end
+        
+        | "exit", [] ->
           print "treat" 1 "@[Exiting@]@,"; ()
           (* Session.exit session *)
 
