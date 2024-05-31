@@ -300,7 +300,7 @@ and treat_sat state level model support learnt : treat_sat_result * Term.t list 
           (*     None *)
                       (*   | _             -> assert false *)
           else
-            failwith "FIXME"
+            aux model cumulated_support reasons4success learnt opponents
         end
 
       | Sat reasons4failure ->
