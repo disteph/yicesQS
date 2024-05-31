@@ -1,7 +1,6 @@
 open! Containers
 
 open Ext
-
 open Utils
 
 module HTerms = Types.HTerms
@@ -55,7 +54,7 @@ let generalize_model model ~true_of_model ~rigid_vars ~newvars =
         (*    end *)
         | _ -> WithEpsilons.return value
       in
-      print 3 "@[<v2>Trying to eliminate variable %a, with value %a and matching variables %a@]@,"
+      print "generalize_model" 3 "@[<v2>Trying to eliminate variable %a, with value %a and matching variables %a@]@,"
         Term.pp var
         Term.pp value.main
         (List.pp Term.pp) terms;
@@ -116,11 +115,11 @@ let generalize_model ~logic model ~true_of_model ~rigid_vars ~newvars
          generalize_model model
            ~true_of_model:(WithEpsilons.return true_of_model) ~rigid_vars ~newvars
      end
-  | `BV ->
+  | `BV when !Command_options.bv_invert ->
      (* First, we try to eliminate as many variables as we can by invertibility conditions *)
      let ic = IC.elim_existentials_init newvars true_of_model in
-     print 3 "@[<v2>Formula sent to IC is %a@]@," Term.pp true_of_model;
-     print 3 "@[<v2>Formula returned by IC is %a@]@," Term.pp WithEpsilons.(ic.main);
+     print "generalize_model" 3 "@[<v2>Formula sent to IC is %a@]@," Term.pp true_of_model;
+     print "generalize_model" 3 "@[<v2>Formula returned by IC is %a@]@," Term.pp WithEpsilons.(ic.main);
      generalize_model model ~true_of_model:ic ~rigid_vars ~newvars
      
   | _ -> generalize_model model

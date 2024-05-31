@@ -1,5 +1,4 @@
 open! Containers
-open Yices2.Ext
 open Ext
 
 module Support : sig

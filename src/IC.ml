@@ -117,30 +117,30 @@ let getInverseConcat (x : Term.t) (t : Term.t) (concat : _ ExtTerm.block list)
     | [] -> [] (* x did not appear in a nice place *)
 
     | Block{block = Bits _; _} as b :: tail ->
-      print 6 "@[<2>getInverseConcat finds block of bits %a@]@," ExtTerm.pp b;
+      print "getInverseConcat" 6 "@[<2>getInverseConcat finds block of bits %a@]@," ExtTerm.pp b;
       aux (start_index + ExtTerm.width b) tail
 
     | Block{ block = SliceStruct _ as block; sign_ext; zero_ext } as b :: tail ->
       let width = ExtTerm.width b in
-      print 6 "@[<2>getInverseConcat finds block of slice %a@]@," ExtTerm.pp b;
+      print "getInverseConcat" 6 "@[<2>getInverseConcat finds block of slice %a@]@," ExtTerm.pp b;
       if ExtTerm.is_free ~var:x b
       then
         begin
-          print 6 "@[<2>%a appears in it@]@," Term.pp x;
+          print "getInverseConcat" 6 "@[<2>%a appears in it@]@," Term.pp x;
           if sign_ext = 0
           then
-            (print 6 "@[<2>No sign extension@]@,";
+            (print "getInverseConcat" 6 "@[<2>No sign extension@]@,";
              let width = width - zero_ext in
              let t' = Term.BV.bvextract t start_index (start_index + width - 1) in
              (ExtTerm.(ExtTerm block), t') :: aux (start_index + width) tail )
           else
-            (print 6 "@[<2>Sign extension of length %i@]@," sign_ext;
+            (print "getInverseConcat" 6 "@[<2>Sign extension of length %i@]@," sign_ext;
              let b = reduce_sign_ext b in
              aux start_index (b::tail))
         end
       else
         begin
-          print 6 "@[<2>%a doesn't appear in it@]@," Term.pp x;
+          print "getInverseConcat" 6 "@[<2>%a doesn't appear in it@]@," Term.pp x;
           aux (start_index + width) tail
         end
   in
@@ -207,7 +207,7 @@ let getIC : type a. Term.t -> pred -> uneval: a ExtTerm.termstruct -> eval:Term.
    *   in
    *   aux [] l
    * in *)
-  print 6 "@[<2>getIC on %s%a with uneval = %a (%s) and eval = %a (%s)@]@,"
+  print "getInverseConcat" 6 "@[<2>getIC on %s%a with uneval = %a (%s) and eval = %a (%s)@]@,"
     (if polarity then "" else "the negation of ")
     Types.pp_term_constructor (match cons with
         | `YICES_BV_GE_ATOM  -> `YICES_BV_GE_ATOM
@@ -1000,7 +1000,7 @@ let rec solve :
     (conditions : Term.t list) (* Invertibility conditions accumulated in recursive descent *)
     (epsilon    : bool)        (* Whether we have generated epsilon terms / new variables *)
   ->
-  print 6 "@[<2>solve with var = %a, uneval = %a and eval = %a@]@,"
+  print "IC.solve" 6 "@[<2>solve with var = %a, uneval = %a and eval = %a@]@,"
     Term.pp x
     ExtTerm.pp uneval
     Term.pp eval;
@@ -1014,7 +1014,7 @@ let rec solve :
   | T e when not(Term.equal e x)     -> let YExtTerm a = of_term e in solve a
   | T e -> (* Particular case when the 1st argument is x itself - end of recursion *)
     try
-      print 6 "@[<2>uneval is the variable@]@,";
+      print "IC.solve" 6 "@[<2>uneval is the variable@]@,";
       let subst = 
         match cons with
         | `YICES_EQ_TERM when polarity -> { body = eval; conditions; epsilon }
@@ -1050,7 +1050,7 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
     ~polarity
     (conditions : Term.t list)
     (epsilon    : bool) ->
-    print 6 "@[<2>uneval is not the variable@]@,";
+    print "IC.solve" 6 "@[<2>uneval is not the variable@]@,";
     let open ExtTerm in
     (* The recursive call is parameterised by e_i and t *)
     let treat (ExtTerm e_i) t' =
@@ -1117,9 +1117,9 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
         Term.new_uninterpreted typ
       in
       let apply : type a. a closed -> a closed Monad.t = fun e_i ->
-        print 6 "@[<2>apply on e_i = %a@]@," ExtTerm.pp e_i;
+        print "IC.solve" 6 "@[<2>apply on e_i = %a@]@," ExtTerm.pp e_i;
         let variant x' modified =
-          print 6 "@[<2>can modify@]@,";
+          print "IC.solve" 6 "@[<2>can modify@]@,";
           `Cons((modified,
                  Monad.{ variable = x' ; standing4 = ExtTerm e_i }), LazyList.empty)
         in
@@ -1143,10 +1143,10 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
       | _      -> Variants.map { apply } a
     in
     let treat dx' Monad.{ variable = x' ; standing4 = ExtTerm e_i } = try
-        print 6 "@[<2>treat on var %a standing for head %a@]@," Term.pp x' ExtTerm.pp e_i;
-        print 6 "@[<2>with dx' being %a@]@," ExtTerm.pp dx';
+        print "IC.solve" 6 "@[<2>treat on var %a standing for head %a@]@," Term.pp x' ExtTerm.pp e_i;
+        print "IC.solve" 6 "@[<2>with dx' being %a@]@," ExtTerm.pp dx';
         let phi, ci = getIC x' cons ~uneval:dx' ~eval:t ~uneval_left ~polarity in
-        print 6 "@[<2>getIC gave us %a@]@," Term.pp phi;
+        print "IC.solve" 6 "@[<2>getIC gave us %a@]@," Term.pp phi;
         let y, epsilon = match ci with
           | Some y -> y, epsilon
           | None -> x', true
@@ -1156,7 +1156,7 @@ and solve_aux : type a. Term.t -> pred -> a ExtTerm.termstruct -> eval:Term.t ->
         solve x `YICES_EQ_TERM ~uneval:e_i ~eval:y ~uneval_left:true ~polarity:true
           (Term.(phi ==> b)::conditions) epsilon
       with NotImplemented ->
-        print 6 "Not implemented@,";
+        print "IC.solve" 6 "Not implemented@,";
          Substs.nil
     in
     let aux _nexts (dx'_raw, modif) = treat dx'_raw modif in
@@ -1170,7 +1170,7 @@ let solve_atom
     (polarity : bool)
   =
   let Types.A2(cons,e,t) = atom in
-  print 6 "@[<2>solve_atom %a with lhs = %a and rhs = %a@]@,"
+  print "solve_atom" 6 "@[<2>solve_atom %a with lhs = %a and rhs = %a@]@,"
     Term.pp x
     Term.pp e
     Term.pp t;
@@ -1183,7 +1183,7 @@ let solve_atom
        then
          match cons with
          | `YICES_EQ_TERM when Term.is_bitvector t || Term.is_arithmetic t ->
-            print 6 "@[<2>Present on both sides, and is bv or arith@]@,";
+            print "solve_atom" 6 "@[<2>Present on both sides, and is bv or arith@]@,";
             let uneval, eval =
               if Term.is_bitvector t
               then Term.BV.bvsub t e, Term.BV.bvconst_zero ~width:(Term.width_of_term t)
@@ -1193,17 +1193,17 @@ let solve_atom
               ~uneval:(T uneval) ~eval ~uneval_left:true ~polarity
               [] false
          | _ ->
-            print 6 "@[<2>Present on both sides, and is not bv or arith@]@,";
+            print "solve_atom" 6 "@[<2>Present on both sides, and is not bv or arith@]@,";
             solve x cons ~uneval:(T e) ~eval:t ~uneval_left:true ~polarity
               [] false
             ||>
               solve x cons ~uneval:(T t) ~eval:e ~uneval_left:false ~polarity
                 [] false
        else
-         (print 6 "@[<2>Present on rhs only@]@,";
+         (print "solve_atom" 6 "@[<2>Present on rhs only@]@,";
           solve x cons ~uneval:(T t) ~eval:e ~uneval_left:false ~polarity [] false)
      else
-       (print 6 "@[<2>Present on lhs only@]@,";
+       (print "solve_atom" 6 "@[<2>Present on lhs only@]@,";
         solve x cons ~uneval:(T e) ~eval:t ~uneval_left:true ~polarity [] false)
   | _ ->
      Format.(fprintf stdout) "wrong predicate in solve_atom: %a" Term.pp (Term.build atom);
@@ -1220,9 +1220,9 @@ let solve_lit x lit substs =
     else
       match reveal t with
       | Term(A2 _ as atom) when is_free ~var:x t ->
-        print 5 "@[<v2>solve_lit looks at@,%a@," Term.pp lit;
+        print "solve_lit" 5 "@[<v2>solve_lit looks at@,%a@," Term.pp lit;
         let r = solve_atom x atom b substs in
-        print 5 "@[<2>which turns into %a@]@]@," (Substs.pp_substs x) r;
+        print "solve_lit" 5 "@[<2>which turns into %a@]@]@," (Substs.pp_substs x) r;
         r
       | _ -> Substs.nil substs
   in
@@ -1274,14 +1274,14 @@ let solve_lit x lit substs =
 
 
 let solve_list conjuncts var old_epsilons : Term.t list WithEpsilons.t =
-  print 5 "@[<hv2>solve_list solves %a from@,%a@,@[<v>"
+  print "solve_list" 5 "@[<hv2>solve_list solves %a from@,%a@,@[<v>"
     Term.pp var
     (List.pp Term.pp) conjuncts;
   let rec aux treated accu = function
     | [] ->
       begin match accu with
         | Epsilon {body; conditions; epsilon = _ } ->
-          print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp var Term.pp body;
+          print "solve_list" 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp var Term.pp body;
           (* let aux conjunct =
            *   let new_conjunct = Term.subst_term [var,body] conjunct in
            *   if not (Term.equal conjunct new_conjunct)
@@ -1303,7 +1303,7 @@ let solve_list conjuncts var old_epsilons : Term.t list WithEpsilons.t =
       match solve_lit var lit accu with
 
       | Eliminate body ->
-        print 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp var Term.pp body;
+        print "solve_list" 5 "@[<2>solve_list substitutes %a by %a@]@," Term.pp var Term.pp body;
         WithEpsilons.{
             main     = Term.subst_terms [var,body] conjuncts;
             epsilons = Term.subst_terms [var,body] old_epsilons }
@@ -1318,17 +1318,17 @@ let solve_list conjuncts var old_epsilons : Term.t list WithEpsilons.t =
         aux (lit::treated) subst tail (* The accumulator has probably been updated my solve_lit *)
   in
   let result = aux [] (NonLinear []) conjuncts in
-  print 5 "@]@]@,";
+  print "solve_list" 5 "@]@]@,";
   result
 
 let elim_existentials vars t =
   let open WithEpsilonsMonad in
   let conjuncts = get_conjuncts t in
-  print 3 "@[<2>IC analyses %a@]@," Term.pp t;
+  print "elim_existentials" 3 "@[<2>IC analyses %a@]@," Term.pp t;
   let+ conjuncts =
     ListWithEpsilons.fold solve_list (WithEpsilonsMonad.return conjuncts) vars
   in
-  print 3 "@[<2>IC finished@]@,";
+  print "elim_existentials" 3 "@[<2>IC finished@]@,";
   return(Term.andN conjuncts)
 
 let elim_existentials_init vars t = elim_existentials vars t []
@@ -1372,3 +1372,13 @@ let weaken_existentials vars tolearn =
     vars
 
 let weaken_existentials_init vars tolearn = weaken_existentials vars tolearn []
+  (* print "solve_all" 3 "@[<2>IC analyses %a@]@," Term.pp t; *)
+  (* let rec aux conjuncts conditions = function *)
+  (*   | [] -> conjuncts, conditions *)
+  (*   | x::vars -> *)
+  (*     let conjuncts, conditions = solve_list conjuncts conditions x in *)
+  (*     aux conjuncts conditions vars *)
+  (* in *)
+  (* let conjuncts, conditions = aux conjuncts [] vars in *)
+  (* print "solve_all" 3 "@[<2>IC finished@]@,"; *)
+  (* WithEpsilons.{ main = Term.andN conjuncts; epsilons = conditions } *)

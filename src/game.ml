@@ -143,7 +143,7 @@ let rec process config ~logic ~rigidintro ~rigid ~intro body : t WithEpsilonsMon
               Technically we just need (selector ==> SubGame.ground),
               but experiments show slightly better results with ===; who knows why... *)
            let universal   = Term.(selector === SubGame.ground) in
-           print 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
+           print "process" 5 "@[<2>Abstracting as %a formula @,%a@]@," Term.pp name Term.pp t;
 
            let WithEpsilons.{ main = projection; epsilons } =
              let open WithEpsilons in
@@ -173,7 +173,7 @@ let rec process config ~logic ~rigidintro ~rigid ~intro body : t WithEpsilonsMon
     | _ ->
        let+ x = map aux a in return(Term.build x)
   in
-  print 5 "@[<v2>Traversing term@,%a@]@," Term.pp body;
+  print "process" 5 "@[<v2>Traversing term@,%a@]@," Term.pp body;
   let id = !counter in
   fun epsilons ->
   let state = { newvars = intro;

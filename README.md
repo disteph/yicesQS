@@ -1,25 +1,39 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 # yicesQS
-Quantified Satisfiability in Yices
 
-This repository contains a solver for quantified satisfiability, calling Yices2 for ground satisfiability queries. It currently only supports the following two logics of SMTLib:
+YicesQS is an extension of Yices2 for quantified satisfiability. It currently supports the following logics of SMTLib:
 
-- NRA (non-linear real arithmetic)
+- NRA (non-linear real arithmetic). Winner in
+[2021](https://smt-comp.github.io/2021/results/nra-single-query)
+[2022](https://smt-comp.github.io/2022/results/nra-single-query)
+[2023](https://smt-comp.github.io/2023/results/nra-single-query).
+- NIA (non-linear integer arithmetic)
+[2022](https://smt-comp.github.io/2022/results/nia-single-query)
+[2023](https://smt-comp.github.io/2023/results/nia-single-query)
+- LRA (linear real arithmetic). Winner in
+[2022](https://smt-comp.github.io/2022/results/lra-single-query)
+[2023](https://smt-comp.github.io/2023/results/lra-single-query).
+- LIA (linear integer arithmetic)
+[2022](https://smt-comp.github.io/2022/results/lia-single-query)
+[2023](https://smt-comp.github.io/2023/results/lia-single-query)
 - BV (bitvector)
+[2021](https://smt-comp.github.io/2021/results/bitvec-single-query)
+[2022](https://smt-comp.github.io/2022/results/bitvec-single-query)
+[2023](https://smt-comp.github.io/2023/results/bitvec-single-query)
 
-The solver entered the SMT'2021 competition in those logics (single query track), and won NRA:
+A description of the solver can be found on the [2021](https://smt-comp.github.io/2021/system-descriptions/Yices2-QS.pdf) and [2022](https://smt-comp.github.io/2022/system-descriptions/YicesQS.pdf) SMT-comp websites.
 
-- [https://smt-comp.github.io/2021/results/nra-single-query](https://smt-comp.github.io/2021/results/nra-single-query)
-- [https://smt-comp.github.io/2021/results/bitvec-single-query](https://smt-comp.github.io/2021/results/bitvec-single-query)
 
-A description of the solver can be found on the SMT-comp website:
 
-[https://smt-comp.github.io/2021/system-descriptions/Yices2-QS.pdf](https://smt-comp.github.io/2021/system-descriptions/Yices2-QS.pdf)
 
 ## Building and Running
 
-#### Installing dependencies with opam (needs 2.0 or higher, needs gmp)
+#### Yices2 and dependencies
+
+Install [Yices version 2.6.4](https://yices.csl.sri.com/) and its dependencies [libpoly](https://github.com/SRI-CSL/libpoly) and [cudd](https://github.com/ivmai/cudd).
+
+#### Installing OCaml dependencies with opam (needs 2.0 or higher)
 
 Besides Yices and its dependencies, YicesQS needs some OCaml dependencies and the Yices2 bindings. Assuming that the yices library (and the libraries it depends on) are present in the conventional directories (like `/usr/local/lib`), the OCaml libraries can all be installed by the following opam commands. 
 If for some reason this is not the case, follow the instructions for "Installing dependencies without opam".
@@ -27,7 +41,9 @@ If for some reason this is not the case, follow the instructions for "Installing
 First, run:
 
 ```
-opam pin yices2_bindings https://github.com/SRI-CSL/yices2_ocaml_bindings/archive/refs/heads/yices-2.6.4.zip
+opam pin tracing https://github.com/disteph/tracing/archive/refs/heads/main.zip
+opam pin libpoly_bindings https://github.com/SRI-CSL/libpoly_ocaml_bindings/archive/refs/heads/main.zip
+opam pin yices2 https://github.com/SRI-CSL/yices2_ocaml_bindings/archive/49f9c9eabddfe27b5f965e6e0913da8c5450578c.zip
 ```
 Note that this URL is the correct version of the Yices2 bindings that YicesQS requires. Opam may have a `yices2_bindings` package, but it's probably outdated.
 
@@ -37,14 +53,13 @@ Then, in the directory of this `README.md`, install (in findlib) the remaining O
 opam install . --deps-only
 ```
 
-#### Installing dependencies without opam (or with the Yices library being located in an unconventional directory)
+#### Installing OCaml dependencies without opam (or with the Yices library being located in an unconventional directory)
 
-You should start by installing the Yices2 bindings, in the yices-2.6.3 branch,
-following the instructions given there:
+You should start by installing the 
+[Yices2 bindings (in the dev branch)
+following these instructions](https://github.com/SRI-CSL/yices2_ocaml_bindings/tree/49f9c9eabddfe27b5f965e6e0913da8c5450578c).
 
-[https://github.com/SRI-CSL/yices2\_ocaml\_bindings/tree/yices-2.6.3](https://github.com/SRI-CSL/yices2_ocaml_bindings/tree/yices-2.6.3)
-
-Then inspect `yicesQS.opam` to see if there are further OCaml dependencies listed there; if there are not installed (in findlib), install them with opam from source.
+Then inspect `yicesQS.opam` to see if there are further OCaml dependencies listed there; if there are not installed (in findlib), install them with opam or from source.
 
 #### Building
 

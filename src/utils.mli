@@ -5,7 +5,7 @@ open Yices2.Ext.WithNoErrorHandling
 val get_disjuncts : Term.t -> Term.t list
 val get_conjuncts : Term.t -> Term.t list
 
-val print : int -> ('b, Format.formatter, unit) format -> 'b
+val print : string -> int -> ('b, Format.formatter, unit) format -> 'b
 val pp_space : unit Format.printer
 
 module type Monad = sig
