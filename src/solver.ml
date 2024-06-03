@@ -73,8 +73,8 @@ let check_interpolant _state _level _model _interpolant _context = ()
 let timer = Timer.create "timer"
 exception TimeToSwitch
 let count = ref 0
-let next_check = ref 100
-let check_interval = 60.0
+let next_check = ref 10
+let check_interval = 5.0
 
 let rec solve ?(compute_over=true) state level model support : answer*SolverState.t =
   let (module S:SolverState.T) = state in
