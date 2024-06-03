@@ -70,11 +70,26 @@ let check_interpolant _state _level _model _interpolant _context = ()
 
 [%%endif]
 
+let timer = Timer.create "timer"
+exception TimeToSwitch
+let count = ref 0
+let next_check = ref 100
+let check_interval = 60.0
 
 let rec solve ?(compute_over=true) state level model support : answer*SolverState.t =
+  let (module S:SolverState.T) = state in
+  if Float.(!cdclT_mcsat > 0.0)
+     && (match S.logic with | `BV -> true | _ -> false)
+     && Int.(!count = !next_check)
+  then
+    (count := 0;
+     let since_last_check = Timer.last_time() in
+     let new_time = Timer.read timer in
+     if Float.(Timer.read timer > !cdclT_mcsat)
+     then raise TimeToSwitch;
+     next_check := Float.(float_of_int !next_check / (new_time - since_last_check) * check_interval |> ceil |> to_int));
+  let open S in
   try
-    let (module S:SolverState.T) = state in
-    let open S in
     print "solve" 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
       Level.pp level
       (SModel.pp()) (SModel{ model; support = Support.list support });
@@ -331,6 +346,17 @@ let setmode config = Config.set config ~name:"mode" ~value:"push-pop"
 let setmode config = Config.set config ~name:"mode" ~value:"multi-checks"
 [%%endif]
 
+let set_config mcsat =
+  let cfg = Config.malloc () in
+  if mcsat
+  then
+    begin 
+      Config.set cfg ~name:"solver-type" ~value:"mcsat";
+      Config.set cfg ~name:"model-interpolation" ~value:"true"
+    end;
+  setmode cfg;
+  cfg
+
 let treat filename =
   let sexps = SMT2.load_file filename in
   let session    = Session.create 0 in
@@ -371,24 +397,15 @@ let treat filename =
           assertions := formula::!assertions
 
         | "set-logic",  [Atom l]            ->
-           let cfg = Config.malloc () in
            print "treat" 3 "@[Setting logic to %s@]@," l;
+           logic  := l;
            let mcsat =
              match !Command_options.ysolver with
              | Some `MCSAT -> true
              | Some `CDCLT -> false
              | None -> not(String.equal "BV" l)
            in
-           if mcsat
-           then
-             begin 
-               Config.set cfg ~name:"solver-type" ~value:"mcsat";
-               Config.set cfg ~name:"model-interpolation" ~value:"true"
-             end;
-           setmode cfg;
-           config := Some cfg;
-           logic  := l
-           
+           config := Some(set_config mcsat)
 
         | "check-sat", [] ->
            begin
@@ -403,9 +420,17 @@ let treat filename =
                 in
                 print "treat" 3 "@[<v 1>Computed game is:@,@[%a@]@]@," Game.pp game;
                 print "treat" 2 "@]@,";
-                let state = SolverState.create ~logic:!logic config game in
                 print "treat" 1 "@[<v>";
-                let answer, state = solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty in
+                Timer.start timer;
+                let answer, state =
+                  try
+                    let state = SolverState.create ~logic:!logic config game in
+                    solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
+                  with
+                    TimeToSwitch ->
+                    let state = SolverState.create ~logic:!logic (set_config true) game in
+                    solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
+                in
                 print "treat" 1 "@]@,";
                 let str = return state answer !expected in
                 Format.(fprintf stdout) "@[%s@]@," str;

@@ -68,10 +68,11 @@ let force_fail() =
   if Option.is_some !ysolver then failwith "Trying to force solver more than once."
   
 let options = [
-  ("-under",    Int(fun u -> underapprox := u), "Desired number of underapproximations in SAT answers (default is 1)");
-  ("-no_bv_invert", Clear bv_invert, "Disables invertibility conditions for BV (default is false, i.e. invertibility conditions are computed)");
-  ("-mcsat",    Unit(fun () -> force_fail(); ysolver := Some `MCSAT), "Forces usage of MCSAT");
-  ("-cdclT",    Unit(fun () -> force_fail(); ysolver := Some `CDCLT), "Forces usage of CDCL(T)");
+  ("-under",    Int(fun u -> underapprox := u), "\t\tDesired number of underapproximations in SAT answers (default is 1)");
+  ("-no_bv_invert", Clear bv_invert, "\tDisables invertibility conditions for BV (default is false, i.e. invertibility conditions are computed)");
+  ("-mcsat",    Unit(fun () -> force_fail(); ysolver := Some `MCSAT), "\t\tForces usage of MCSAT");
+  ("-cdclT",    Unit(fun () -> force_fail(); ysolver := Some `CDCLT), "\t\tForces usage of CDCL(T)");
+  ("-cdclT-mcsat", Int(fun s -> force_fail(); cdclT_mcsat := float_of_int s), "X \tIn BV: tries CDCL(T) for up to X seconds, then switches to MCSAT; no effect if logic is not BV");
 ]@Tracing.options;;
 
 Arg.parse options (fun a->args := a::!args) description;;
