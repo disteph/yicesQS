@@ -74,20 +74,26 @@ let timer = Timer.create "timer"
 exception TimeToSwitch
 let count = ref 0
 let next_check = ref 10
-let check_interval = 5.0
+let last_time = ref 0.0
+let check_interval = 1.0
 
 let rec solve ?(compute_over=true) state level model support : answer*SolverState.t =
   let (module S:SolverState.T) = state in
   if Float.(!cdclT_mcsat > 0.0)
-     && (match S.logic with | `BV -> true | _ -> false)
-     && Int.(!count = !next_check)
+     && (not(Context.is_mcsat S.context))
+     && (incr count;
+         Int.(!count = !next_check))
   then
     (count := 0;
-     let since_last_check = Timer.last_time() in
      let new_time = Timer.read timer in
+     print "counter" 1 "@[<v2>Last time is %f. New time is %f@]@," !last_time new_time;
      if Float.(Timer.read timer > !cdclT_mcsat)
      then raise TimeToSwitch;
-     next_check := Float.(float_of_int !next_check / (new_time - since_last_check) * check_interval |> ceil |> to_int));
+     next_check :=
+       Float.( (float_of_int !next_check / (new_time - !last_time) * check_interval)
+               |> ceil |> to_int);
+     last_time  := new_time;
+     print "counter" 1 "@[<v2> No switch @]@,@[<v2>Next count is %i@]@," !next_check);
   let open S in
   try
     print "solve" 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
@@ -428,6 +434,7 @@ let treat filename =
                     solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
                   with
                     TimeToSwitch ->
+                    print "counter" 1 "@[<v>SWITCH TO MCSAT@]@,";
                     let state = SolverState.create ~logic:!logic (set_config true) game in
                     solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
                 in
