@@ -71,7 +71,7 @@ let check_interpolant _state _level _model _interpolant _context = ()
 [%%endif]
 
 let timer = Timer.create "timer"
-exception TimeToSwitch
+exception TimeToRestart
 let count = ref 0
 let next_check = ref 0
 let last_time = ref 0.0
@@ -89,13 +89,13 @@ let rec luby () =
     next_check := !next_check + 1;
     result
 
-let rec solve ?(compute_over=true) state ~top_level level model support : answer*SolverState.t =
+let rec solve ?(compute_over=true) state level model support : answer*SolverState.t =
   let (module S:SolverState.T) = state in
   if (incr count;
-      Int.(!count = !next_check + 2))
+      Int.(!count = !next_check + 10))
   then
     (next_check := luby ();
-     solve ~compute_over:false state ~top_level top_level model support)
+     raise TimeToRestart)
   else
   let open S in
   try
@@ -132,7 +132,7 @@ let rec solve ?(compute_over=true) state ~top_level level model support : answer
         (SModel.pp())
         (SModel{support = List.append level.newvars (Support.list support); model });
 
-      post_process ~compute_over state ~top_level level model support
+      post_process ~compute_over state level model support
 
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
@@ -140,9 +140,9 @@ let rec solve ?(compute_over=true) state ~top_level level model support : answer
     ExceptionsErrorHandling.YicesException(_,report) ->
     raise (FromYicesException(state, level,report, Printexc.get_backtrace()))
 
-and post_process ~compute_over state ~top_level level model support =
+and post_process ~compute_over state level model support =
   print "indent" 0 "@[<v 1> ";
-  let result = treat_sat state ~top_level level model support in
+  let result = treat_sat state level model support in
   print "indent" 0 "@]@,%!";
   match result with
   | Some underapprox ->
@@ -151,9 +151,9 @@ and post_process ~compute_over state ~top_level level model support =
      else print "disabled" 0 "@[Underapproximation@]@,";
      Sat underapprox, state
 
-  | None -> (solve[@tailcall]) ~compute_over state ~top_level level model support
+  | None -> (solve[@tailcall]) ~compute_over state level model support
 
-and treat_sat state ~top_level level model support =
+and treat_sat state level model support =
   let (module S:SolverState.T) = state in
 
   let compute_under =
@@ -254,7 +254,7 @@ and treat_sat state ~top_level level model support =
         let SModel{ model = recurs_model ; _} =
           Context.get_model o.selector_context ~keep_subst:true
         in
-        solve ~compute_over:compute_under state ~top_level o.sublevel recurs_model recurs_support
+        solve ~compute_over:compute_under state o.sublevel recurs_model recurs_support
 
       in
       (* elim_trigger eliminates the trigger variable from the explanations given by the
@@ -432,14 +432,16 @@ let treat filename =
                 print "treat" 1 "@[<v>";
                 Timer.start timer;
                 let answer, state =
+                  let state = SolverState.create ~logic:!logic config game in
+                  let rec restarts () =
                   try
-                    let state = SolverState.create ~logic:!logic config game in
-                    solve ~compute_over:false state ~top_level:G.top_level G.top_level (Model.from_map []) Support.Empty
+                    solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
                   with
-                    TimeToSwitch ->
-                    print "counter" 1 "@[<v>SWITCH TO MCSAT@]@,";
-                    let state = SolverState.create ~logic:!logic (set_config true) game in
-                    solve ~compute_over:false state ~top_level:G.top_level G.top_level (Model.from_map []) Support.Empty
+                    TimeToRestart ->
+                    print "restarts" 1 "@[<v>RESTART@]@,";
+                    restarts()
+                  in
+                  restarts ()
                 in
                 print "treat" 1 "@]@,";
                 let str = return state answer !expected in
