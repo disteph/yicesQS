@@ -73,27 +73,30 @@ let check_interpolant _state _level _model _interpolant _context = ()
 let timer = Timer.create "timer"
 exception TimeToSwitch
 let count = ref 0
-let next_check = ref 10
+let next_check = ref 0
 let last_time = ref 0.0
 let check_interval = 1.0
 
-let rec solve ?(compute_over=true) state level model support : answer*SolverState.t =
+let rec luby () =
+  let rec highest_power_of_2_leq n =
+    if n = 1 then 1 else 2 * highest_power_of_2_leq (n / 2)
+  in
+  let k = !next_check in
+  let hp2 = highest_power_of_2_leq (k + 1) in
+  if hp2 = k + 1 then 1
+  else 
+    let result = luby () in
+    next_check := !next_check + 1;
+    result
+
+let rec solve ?(compute_over=true) state ~top_level level model support : answer*SolverState.t =
   let (module S:SolverState.T) = state in
-  if Float.(!cdclT_mcsat > 0.0)
-     && (not(Context.is_mcsat S.context))
-     && (incr count;
-         Int.(!count = !next_check))
+  if (incr count;
+      Int.(!count = !next_check + 2))
   then
-    (count := 0;
-     let new_time = Timer.read timer in
-     print "counter" 1 "@[<v2>Last time is %f. New time is %f@]@," !last_time new_time;
-     if Float.(Timer.read timer > !cdclT_mcsat)
-     then raise TimeToSwitch;
-     next_check :=
-       Float.( (float_of_int !next_check / (new_time - !last_time) * check_interval)
-               |> ceil |> to_int);
-     last_time  := new_time;
-     print "counter" 1 "@[<v2> No switch @]@,@[<v2>Next count is %i@]@," !next_check);
+    (next_check := luby ();
+     solve ~compute_over:false state ~top_level top_level model support)
+  else
   let open S in
   try
     print "solve" 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
@@ -129,7 +132,7 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
         (SModel.pp())
         (SModel{support = List.append level.newvars (Support.list support); model });
 
-      post_process ~compute_over state level model support
+      post_process ~compute_over state ~top_level level model support
 
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
@@ -137,9 +140,9 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
     ExceptionsErrorHandling.YicesException(_,report) ->
     raise (FromYicesException(state, level,report, Printexc.get_backtrace()))
 
-and post_process ~compute_over state level model support =
+and post_process ~compute_over state ~top_level level model support =
   print "indent" 0 "@[<v 1> ";
-  let result = treat_sat state level model support in
+  let result = treat_sat state ~top_level level model support in
   print "indent" 0 "@]@,%!";
   match result with
   | Some underapprox ->
@@ -148,9 +151,9 @@ and post_process ~compute_over state level model support =
      else print "disabled" 0 "@[Underapproximation@]@,";
      Sat underapprox, state
 
-  | None -> (solve[@tailcall]) ~compute_over state level model support
+  | None -> (solve[@tailcall]) ~compute_over state ~top_level level model support
 
-and treat_sat state level model support =
+and treat_sat state ~top_level level model support =
   let (module S:SolverState.T) = state in
 
   let compute_under =
@@ -251,7 +254,7 @@ and treat_sat state level model support =
         let SModel{ model = recurs_model ; _} =
           Context.get_model o.selector_context ~keep_subst:true
         in
-        solve ~compute_over:compute_under state o.sublevel recurs_model recurs_support
+        solve ~compute_over:compute_under state ~top_level o.sublevel recurs_model recurs_support
 
       in
       (* elim_trigger eliminates the trigger variable from the explanations given by the
@@ -431,12 +434,12 @@ let treat filename =
                 let answer, state =
                   try
                     let state = SolverState.create ~logic:!logic config game in
-                    solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
+                    solve ~compute_over:false state ~top_level:G.top_level G.top_level (Model.from_map []) Support.Empty
                   with
                     TimeToSwitch ->
                     print "counter" 1 "@[<v>SWITCH TO MCSAT@]@,";
                     let state = SolverState.create ~logic:!logic (set_config true) game in
-                    solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
+                    solve ~compute_over:false state ~top_level:G.top_level G.top_level (Model.from_map []) Support.Empty
                 in
                 print "treat" 1 "@]@,";
                 let str = return state answer !expected in
