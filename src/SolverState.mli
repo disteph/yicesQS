@@ -13,6 +13,7 @@ module type T = sig
 [%%if debug_mode]
     val epsilons_context : Context.t
 [%%endif]
+    val learnt : Term.t list ref
   end
 
 type t = (module T)

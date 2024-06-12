@@ -71,7 +71,9 @@ let check_interpolant _state _level _model _interpolant _context = ()
 [%%endif]
 
 let timer = Timer.create "timer"
-exception TimeToSwitch
+
+exception TimeToSwitch of Term.t list
+
 let count = ref 0
 let next_check = ref 10
 let last_time = ref 0.0
@@ -88,7 +90,12 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
      let new_time = Timer.read timer in
      print "counter" 1 "@[<v2>Last time is %f. New time is %f@]@," !last_time new_time;
      if Float.(Timer.read timer > !cdclT_mcsat)
-     then raise TimeToSwitch;
+     then
+       begin
+         let lemmas = !S.learnt in
+         S.learnt := [];
+         raise (TimeToSwitch lemmas)
+       end;
      next_check :=
        Float.( (float_of_int !next_check / (new_time - !last_time) * check_interval)
                |> ceil |> to_int);
@@ -428,16 +435,25 @@ let treat filename =
                 print "treat" 2 "@]@,";
                 print "treat" 1 "@[<v>";
                 Timer.start timer;
-                let answer, state =
-                  try
-                    let state = SolverState.create ~logic:!logic config game in
-                    solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
-                  with
-                    TimeToSwitch ->
-                    print "counter" 1 "@[<v>SWITCH TO MCSAT@]@,";
-                    let state = SolverState.create ~logic:!logic (set_config true) game in
-                    solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
+                let cdclT_state = SolverState.create ~logic:!logic config game in
+                let mcsat_state = SolverState.create ~logic:!logic (set_config true) game in
+                let rec aux a b lemmas =
+                  try a lemmas with
+                    TimeToSwitch lemmas ->
+                    print "counter" 1 "@[<v>SWITCH@]@,";
+                    aux b a lemmas
                 in
+                let cdclT lemmas =
+                  let (module S : SolverState.T) = cdclT_state in
+                  Context.assert_formulas S.context lemmas;
+                  solve ~compute_over:false cdclT_state G.top_level (Model.from_map []) Support.Empty
+                in
+                let mcsat lemmas =
+                  let (module S : SolverState.T) = mcsat_state in
+                  Context.assert_formulas S.context lemmas;
+                  solve ~compute_over:false mcsat_state G.top_level (Model.from_map []) Support.Empty
+                in
+                let answer, state = aux cdclT mcsat [] in
                 print "treat" 1 "@]@,";
                 let str = return state answer !expected in
                 Format.(fprintf stdout) "@[%s@]@," str;

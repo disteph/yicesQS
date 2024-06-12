@@ -19,7 +19,7 @@ module type T = sig
   [%%if debug_mode]
   val epsilons_context  : Context.t (* context with only epsilon term constraints at level 0 *)
 [%%endif]
-(* val learnt : Term.t list ref *)
+  val learnt : Term.t list ref
 end
 
 type t = (module T)
@@ -68,7 +68,7 @@ let create ~logic config (module G : Game.T) =
      let () = Context.assert_formula context ground
      let () = Context.assert_formulas context (Seq.to_list existentials)
      let () = Context.assert_formulas context (Seq.to_list universals)
-                                      (* let learnt = ref [] *)
+     let learnt = ref []
    end : T)
 
 [%%if debug_mode]
@@ -78,7 +78,7 @@ let epsilon_assert _ _ = ()
 [%%endif]
 
 let learn (module S : T) lemmas =
-  (* learnt := List.append lemma !S.learnt; *)
+  S.learnt := List.append lemmas !S.learnt;
   print "learn" 0 "@[<2>Learning %a@]@," (List.pp Term.pp) lemmas;
   Context.assert_formulas S.context lemmas
 
