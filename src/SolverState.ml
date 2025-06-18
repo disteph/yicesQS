@@ -43,23 +43,24 @@ let pp_log_raw fmt ((module T:T),log) =
   let option = List[Atom "set-option"; Atom ":produce-unsat-model-interpolants"; Atom "true"] in
   Format.fprintf fmt "@[<v>%a@]" (List.pp ~pp_sep:pp_space pp_sexp) (option::sl::log)
 
+let parse_logic = function
+  | "NRA" | "QF_NRA" -> `NRA
+  | "NIA" | "QF_NIA" -> `NIA
+  | "LRA" | "QF_LRA" -> `LRA
+  | "LIA" | "QF_LIA" -> `LIA
+  | "BV"  | "QF_BV"  -> `BV
+  | _  -> `Other
+
+
 let create ~logic config (module G : Game.T) =
   let qf_logic =
     if String.length logic > 3 && String.equal (String.sub logic 0 3) "QF_"
     then logic
     else "QF_"^logic
   in
-  let logic = match logic with
-    | "NRA" | "QF_NRA" -> `NRA
-    | "NIA" | "QF_NIA" -> `NIA
-    | "LRA" | "QF_LRA" -> `LRA
-    | "LIA" | "QF_LIA" -> `LIA
-    | "BV"  | "QF_BV"  -> `BV
-    | _     -> print_endline("Unknown logic: "^logic); `BV 
-  in
   (module struct
      include G
-     let logic = logic
+     let logic = parse_logic logic
      let qf_logic = qf_logic
 [%%if debug_mode]
      let epsilons_context = Context.malloc ~config ()
@@ -87,6 +88,9 @@ let record_epsilons ((module S : T) as state) epsilons =
     (List.pp Term.pp) epsilons;
   epsilon_assert state epsilons;
   learn state epsilons
+
+let stop (module G : T) =
+  Context.stop G.context
 
 let free (module G : T) =
   Context.free G.context;

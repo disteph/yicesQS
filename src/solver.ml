@@ -70,30 +70,50 @@ let check_interpolant _state _level _model _interpolant _context = ()
 
 [%%endif]
 
-let timer = Timer.create "timer"
-exception TimeToSwitch
-let count = ref 0
-let next_check = ref 10
-let last_time = ref 0.0
-let check_interval = 1.0
+exception Interrupted 
 
-let rec solve ?(compute_over=true) state level model support : answer*SolverState.t =
-  let (module S:SolverState.T) = state in
-  if Float.(!cdclT_mcsat > 0.0)
-     && (not(Context.is_mcsat S.context))
+let timer = Timer.create "timer"
+let count = ref 0
+
+let param_from_seed i =
+  let p = Param.malloc () in
+  Param.set p ~name:"random-seed" ~value:(string_of_int i);
+  p
+
+let () = Global.init()
+let current_param = ref (param_from_seed 0)
+
+
+(* exception TimeToSwitch of [`CDCLT | `MCSAT] * int *)
+
+(* let is_it_time_to_switch () = 
+  if not (List.is_empty !events)
      && (incr count;
          Int.(!count = !next_check))
   then
-    (count := 0;
-     let new_time = Timer.read timer in
-     print "counter" 1 "@[<v2>Last time is %f. New time is %f@]@," !last_time new_time;
-     if Float.(Timer.read timer > !cdclT_mcsat)
-     then raise TimeToSwitch;
-     next_check :=
-       Float.( (float_of_int !next_check / (new_time - !last_time) * check_interval)
+    match !events with
+    | [] -> next_check := -1
+    | (time, mode, param)::rest ->
+      count := 0;
+      let new_time = Timer.read timer in
+      print "counter" 1 "@[<v2>Last time is %f. New time is %f@]@," !last_time new_time;
+      if Float.(new_time > time)
+      then 
+        (events := rest; 
+        raise (TimeToSwitch(mode,param)));
+      next_check :=
+        Float.( (float_of_int !next_check / (new_time - !last_time) * check_interval)
                |> ceil |> to_int);
-     last_time  := new_time;
-     print "counter" 1 "@[<v2> No switch @]@,@[<v2>Next count is %i@]@," !next_check);
+      last_time  := new_time;
+      print "counter" 1 "@[<v2> No switch @]@,@[<v2>Next count is %i@]@," !next_check *)
+
+let cancel_flag = Atomic.make false
+
+let rec solve ?(compute_over=true) state level model support : answer*SolverState.t =
+  if Atomic.get cancel_flag then raise Interrupted;
+  let (module S:SolverState.T) = state in
+  print "base" 1 "@[<v2>Counter is %i@]@,\n%!" !count;
+  (* is_it_time_to_switch(); *)
   let open S in
   try
     print "solve" 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
@@ -103,8 +123,8 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
     print "solve" 4 "@[Trying to solve over-approximations@]@,";
     let status =
       match support with
-      | Empty -> print "solve" 0 ".%i%!" level.id; Context.check context
-      | S _   -> print "solve" 0 ".%i" level.id; Context.check context
+      | Empty -> print "solve" 0 ".%i%!" level.id; Context.check ~param:!current_param context
+      | S _   -> print "solve" 0 ".%i" level.id; Context.check ~param:!current_param context
                                 ~smodel:(SModel.make model ~support:(Support.list support))
     in
     match status with
@@ -130,6 +150,12 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
         (SModel{support = List.append level.newvars (Support.list support); model });
 
       post_process ~compute_over state level model support
+
+    | `STATUS_INTERRUPTED -> raise Interrupted
+
+    | `STATUS_ERROR -> 
+      ErrorPrint.string() |> print_endline;
+      failwith "not good status: ERROR"
 
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
@@ -352,16 +378,81 @@ let setmode config = Config.set config ~name:"mode" ~value:"push-pop"
 let setmode config = Config.set config ~name:"mode" ~value:"multi-checks"
 [%%endif]
 
+let events = ref []
+
+let create_events logic =
+  let create_pool mode n =
+    for i = 0 to n-1 do
+      events := (2.0, mode, i+1)::!events (* After 2 seconds, switch to mode with seed i *)
+    done
+  in
+  let mcsat_cdclT() =
+    create_pool `MCSAT 10;
+    events := (!cdclT_mcsat, `CDCLT, 0)::!events; (* After a while, switch to MCSAT with seed 0 *)
+    create_pool `CDCLT 10
+  in
+  let cdclT_mcsat() =
+    create_pool `CDCLT 10;
+    events := (!cdclT_mcsat, `MCSAT, 0)::!events; (* After a while, switch to MCSAT with seed 0 *)
+    create_pool `MCSAT 10
+  in
+  let _cdclT() =
+    create_pool `CDCLT 20;
+  in
+  let mcsat() =
+    create_pool `MCSAT 20;
+  in
+  let () =
+  match logic with
+  | `NRA | `NIA -> mcsat() 
+  | `LRA | `LIA -> mcsat_cdclT()
+  | `BV -> cdclT_mcsat()
+  | `Other -> ()
+  in
+  events := List.rev !events
+
+
+
 let set_config mcsat =
   let cfg = Config.malloc () in
-  if mcsat
-  then
-    begin 
+  let () =
+    match mcsat with
+    | `MCSAT ->
       Config.set cfg ~name:"solver-type" ~value:"mcsat";
       Config.set cfg ~name:"model-interpolation" ~value:"true"
-    end;
+    | _ -> ()
+  in
   setmode cfg;
   cfg
+
+open Eio.Std
+
+let run_with_timeout ~timeout_sec ~stop f =
+  Eio_main.run @@ fun env ->
+    let clock = Eio.Stdenv.clock env in
+    let domain_mgr = Eio.Stdenv.domain_mgr env in
+    let result_promise, resolve = Promise.create () in
+    Switch.run (fun sw ->
+      let _fiber =
+        Fiber.fork ~sw (fun () ->
+          let result =
+            try Ok(Eio.Domain_manager.run domain_mgr f)
+            with Interrupted -> Error `Timeout
+          in
+          Promise.resolve resolve result
+        )
+      in
+      match Eio.Time.with_timeout clock timeout_sec (fun () ->
+        Promise.await result_promise
+      ) with
+      | Ok result ->
+          Some result
+      | Error `Timeout ->
+          stop();
+          let _ = Promise.await result_promise in
+          None
+    )
+
 
 let treat filename =
   let sexps = SMT2.load_file filename in
@@ -407,10 +498,10 @@ let treat filename =
            logic  := l;
            let mcsat =
              match !Command_options.ysolver with
-             | Some `MCSAT -> true
-             | Some `CDCLT -> false
-             | None -> not(String.equal "BV" l)
+             | Some mode -> mode
+             | None -> if String.equal "BV" l then `CDCLT else `MCSAT
            in
+           l |> SolverState.parse_logic |> create_events;
            config := Some(set_config mcsat)
 
         | "check-sat", [] ->
@@ -428,16 +519,31 @@ let treat filename =
                 print "treat" 2 "@]@,";
                 print "treat" 1 "@[<v>";
                 Timer.start timer;
-                let answer, state =
-                  try
+                let rec check_sat config = 
                     let state = SolverState.create ~logic:!logic config game in
-                    solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
-                  with
-                    TimeToSwitch ->
-                    print "counter" 1 "@[<v>SWITCH TO MCSAT@]@,";
-                    let state = SolverState.create ~logic:!logic (set_config true) game in
-                    solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
+                    let f () =
+                      solve ~compute_over:false state G.top_level (Model.from_map []) Support.Empty
+                    in
+                    match !events with
+                    | [] -> f()
+                    | (timeout_sec,mode,random_seed)::rest -> 
+                      let stop () =
+                        SolverState.stop state;
+                        Atomic.set cancel_flag true
+                      in
+                      match run_with_timeout ~timeout_sec ~stop f with
+                      | Some a -> a
+                      | None -> 
+                    print "counter" 1 "@[<v>SWITCH TO %s with random seed %i@]@,"
+                      (match mode with `MCSAT -> "MCSAT" | `CDCLT -> "CDCLT")
+                      random_seed;
+                    Param.free !current_param;
+                    current_param := param_from_seed random_seed;
+                    events := rest;
+                    Atomic.set cancel_flag false;
+                    check_sat (set_config mode)
                 in
+                let answer, state = check_sat config in
                 print "treat" 1 "@]@,";
                 let str = return state answer !expected in
                 Format.(fprintf stdout) "@[%s@]@," str;
@@ -456,5 +562,6 @@ let treat filename =
     | _ -> ParseInstruction.parse session sexp
   in
   List.iter treat sexps;
+  Param.free !current_param;
   print "treat" 1 "@[Exited gracefully@]@,";
   !states
