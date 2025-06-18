@@ -75,13 +75,18 @@ exception Interrupted
 let timer = Timer.create "timer"
 let count = ref 0
 
-let param_from_seed i =
+let param_from_seed i logic mode =
   let p = Param.malloc () in
   Param.set p ~name:"random-seed" ~value:(string_of_int i);
+  let () = match logic, mode with
+  | `NIA, `MCSAT | `LIA, `MCSAT ->
+    Param.set p ~name:"mcsat-l2o" ~value:"true";
+  | _ -> ()
+  in
   p
 
 let () = Global.init()
-let current_param = ref (param_from_seed 0)
+let current_param = ref None
 
 
 (* exception TimeToSwitch of [`CDCLT | `MCSAT] * int *)
@@ -123,8 +128,8 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
     print "solve" 4 "@[Trying to solve over-approximations@]@,";
     let status =
       match support with
-      | Empty -> print "solve" 0 ".%i%!" level.id; Context.check ~param:!current_param context
-      | S _   -> print "solve" 0 ".%i" level.id; Context.check ~param:!current_param context
+      | Empty -> print "solve" 0 ".%i%!" level.id; Context.check ~param:(Option.get_exn_or "No parameter" !current_param) context
+      | S _   -> print "solve" 0 ".%i" level.id; Context.check ~param:(Option.get_exn_or "No parameter" !current_param) context
                                 ~smodel:(SModel.make model ~support:(Support.list support))
     in
     match status with
@@ -383,7 +388,7 @@ let events = ref []
 let create_events logic =
   let create_pool mode n =
     for i = 0 to n-1 do
-      events := (2.0, mode, i+1)::!events (* After 2 seconds, switch to mode with seed i *)
+      events := (5.0, mode, i+1)::!events (* After 2 seconds, switch to mode with seed i *)
     done
   in
   let mcsat_cdclT() =
@@ -458,7 +463,8 @@ let treat filename =
   let sexps = SMT2.load_file filename in
   let session    = Session.create 0 in
   let config     = ref None in
-  let logic      = ref "" in
+  let logic      = ref `Other in
+  let mode       = ref `MCSAT in
   let support    = ref [] in
   let expected   = ref None in
   let assertions = ref [] in
@@ -495,13 +501,15 @@ let treat filename =
 
         | "set-logic",  [Atom l]            ->
            print "treat" 3 "@[Setting logic to %s@]@," l;
-           logic  := l;
+           logic := SolverState.parse_logic l;
            let mcsat =
-             match !Command_options.ysolver with
-             | Some mode -> mode
-             | None -> if String.equal "BV" l then `CDCLT else `MCSAT
+             match !Command_options.ysolver, !logic with
+             | Some mode, _ -> mode
+             | None, `BV -> `CDCLT
+             | None, _ -> `MCSAT
            in
-           l |> SolverState.parse_logic |> create_events;
+           create_events !logic;
+           mode := mcsat;
            config := Some(set_config mcsat)
 
         | "check-sat", [] ->
@@ -519,6 +527,7 @@ let treat filename =
                 print "treat" 2 "@]@,";
                 print "treat" 1 "@[<v>";
                 Timer.start timer;
+                current_param := Some (param_from_seed 0 !logic !mode);
                 let rec check_sat config = 
                     let state = SolverState.create ~logic:!logic config game in
                     let f () =
@@ -537,8 +546,8 @@ let treat filename =
                     print "counter" 1 "@[<v>SWITCH TO %s with random seed %i@]@,"
                       (match mode with `MCSAT -> "MCSAT" | `CDCLT -> "CDCLT")
                       random_seed;
-                    Param.free !current_param;
-                    current_param := param_from_seed random_seed;
+                    Param.free (Option.get_exn_or "No param" !current_param);
+                    current_param := Some(param_from_seed random_seed !logic mode);
                     events := rest;
                     Atomic.set cancel_flag false;
                     check_sat (set_config mode)
@@ -562,6 +571,6 @@ let treat filename =
     | _ -> ParseInstruction.parse session sexp
   in
   List.iter treat sexps;
-  Param.free !current_param;
+  Param.free (Option.get_exn_or "No param" !current_param);
   print "treat" 1 "@[Exited gracefully@]@,";
   !states

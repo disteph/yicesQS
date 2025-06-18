@@ -53,14 +53,17 @@ let parse_logic = function
 
 
 let create ~logic config (module G : Game.T) =
-  let qf_logic =
-    if String.length logic > 3 && String.equal (String.sub logic 0 3) "QF_"
-    then logic
-    else "QF_"^logic
+  let qf_logic = match logic with
+  | `NRA -> "QF_NRA" 
+  | `NIA -> "QF_NIA"
+  | `LRA -> "QF_LRA"
+  | `LIA -> "QF_LIA"
+  | `BV  -> "QF_BV"
+  | `Other -> failwith "Cannot process that logic"
   in
   (module struct
      include G
-     let logic = parse_logic logic
+     let logic = logic
      let qf_logic = qf_logic
 [%%if debug_mode]
      let epsilons_context = Context.malloc ~config ()
