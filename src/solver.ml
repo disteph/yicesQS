@@ -87,7 +87,7 @@ let param_from_seed i logic mode =
 
 let () = Global.init()
 let current_param = ref None
-let as_inequalities = false
+let as_inequalities = ref false
 
 (* exception TimeToSwitch of [`CDCLT | `MCSAT] * int *)
 
@@ -129,7 +129,7 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
     let status =
       match support with
       | Empty -> print "solve" 0 ".%i%!" level.id; Context.check ~param:(Option.get_exn_or "No parameter" !current_param) context
-      | S _   -> print "solve" 0 ".%i" level.id; Context.check ~as_inequalities ~param:(Option.get_exn_or "No parameter" !current_param) context
+      | S _   -> print "solve" 0 ".%i" level.id; Context.check ~as_inequalities:!as_inequalities ~param:(Option.get_exn_or "No parameter" !current_param) context
                                 ~smodel:(SModel.make model ~support:(Support.list support))
     in
     match status with
@@ -527,8 +527,9 @@ let treat filename =
                 print "treat" 2 "@]@,";
                 print "treat" 1 "@[<v>";
                 Timer.start timer;
-                current_param := Some (param_from_seed 0 !logic !mode);
                 events := List.rev !events;
+                current_param := Some (param_from_seed 0 !logic !mode);
+                as_inequalities := (match !mode with `CDCLT `Ineq -> true | _ -> false);
                 let rec check_sat config = 
                     let state = SolverState.create ~logic:!logic config game in
                     let f () =
@@ -552,6 +553,7 @@ let treat filename =
                           random_seed;
                         Param.free (Option.get_exn_or "No param" !current_param);
                         current_param := Some(param_from_seed random_seed !logic newmode);
+                        as_inequalities := (match newmode with `CDCLT `Ineq -> true | _ -> false);
                         events := rest;
                         Atomic.set cancel_flag false;
                         check_sat (set_config newmode)
