@@ -401,12 +401,12 @@ let create_events logic =
 
     | `LRA -> 
       if auto_portfolio then
-        create_pool (Some `MCSAT) (timeout /. 4.) 4;
+        create_pool (Some `MCSAT) (timeout /. 4.) 3;
       `MCSAT
 
     | `LIA ->
       if auto_portfolio then
-        create_pool (Some(`CDCLT `Ineq)) (timeout /. 6.) 6;
+        create_pool (Some(`CDCLT `Ineq)) (timeout /. 6.) 5;
       `CDCLT `Ineq
 
     | `BV ->
