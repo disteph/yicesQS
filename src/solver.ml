@@ -391,38 +391,34 @@ let create_events logic =
     | Some timeout, [] -> true, timeout
     | _ -> false, 0.
   in
-    let small_switch = 5. *. timeout /. 1200. in
-    let big_switch = 700. *. timeout /. 1200. in
-    let mcsat_cdclT ass () =
-      if auto_portfolio then
-      (create_pool (Some `MCSAT) small_switch 10;
-        events := (big_switch, Some (`CDCLT ass), 0)::!events; (* After a while, switch to CDCLT with seed 0 *)
-        create_pool (Some (`CDCLT ass)) small_switch 10);
-      `MCSAT
-    in
-    let cdclT_mcsat ass () =
-      if auto_portfolio then
-      (create_pool (Some (`CDCLT ass)) small_switch 10;
-        events := (big_switch, Some `MCSAT, 0)::!events; (* After a while, switch to MCSAT with seed 0 *)
-        create_pool (Some `MCSAT) small_switch 10);
-      `CDCLT ass
-    in
-    let _cdclT ass () =
-      if auto_portfolio then
-        create_pool (Some (`CDCLT ass)) small_switch 20;
-      `CDCLT ass
-    in
-    let mcsat() =
+  let small_switch = 5. /. 1200. *. timeout in
+  let f () = 
+    match logic with
+    | `NRA | `NIA ->
       if auto_portfolio then
         create_pool (Some `MCSAT) small_switch 20;
       `MCSAT
-    in
-    match logic with
-    | `NRA | `NIA -> Option.get_lazy mcsat !ysolver
-    | `LRA | `LIA -> Option.get_lazy (cdclT_mcsat `Eq) !ysolver
-    (*| `LRA | `LIA -> Option.get_lazy (mcsat_cdclT `Eq) !ysolver *)
-    | `BV ->  Option.get_lazy (cdclT_mcsat `Eq) !ysolver
+
+    | `LRA -> 
+      if auto_portfolio then
+        create_pool (Some `MCSAT) (timeout /. 4.) 4;
+      `MCSAT
+
+    | `LIA ->
+      if auto_portfolio then
+        create_pool (Some(`CDCLT `Ineq)) (timeout /. 6.) 6;
+      `CDCLT `Ineq
+
+    | `BV ->
+      if auto_portfolio then
+        (create_pool (Some (`CDCLT `Eq)) small_switch 10;
+        events := (700./.1200. *. timeout, Some `MCSAT, 0)::!events; (* After a while, switch to MCSAT with seed 0 *)
+        create_pool (Some `MCSAT) small_switch 10);
+      `CDCLT `Eq
+
     | `Other -> `MCSAT
+  in
+  Option.get_lazy f !ysolver
   
 
 let set_config mcsat =
