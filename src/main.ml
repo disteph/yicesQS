@@ -64,18 +64,43 @@ open Arg
 let args = ref []
 let description = "QE in Yices"
 
-let force_fail() =
-  if Option.is_some !ysolver then failwith "Trying to force solver more than once."
-  
+let init_solver : mode option ref = ref None
+let set_mcsat () =
+  if Option.is_none !init_solver then init_solver := Some `MCSAT;
+  ysolver := Some `MCSAT
+let set_cdclT ass =
+  let solver =
+    match ass with
+    | "Eq" | "eq" | "EQ" -> Some(`CDCLT `Eq) 
+    | _    -> Some(`CDCLT `Ineq)
+  in
+  if Option.is_none !init_solver then init_solver := solver;
+  ysolver := solver
+
+let init_seed = ref None
+let set_seed s =
+  if Option.is_none !init_seed then init_seed := Some s;
+  yseed := s
+
+let switch i = events := (float_of_int i,!ysolver,!yseed)::!events
+let switch_seeds n =
+  create_pool !ysolver !switch_after n
+
+
 let options = [
-  ("-under",    Int(fun u -> underapprox := u), "\t\tDesired number of underapproximations in SAT answers (default is 1)");
-  ("-no_bv_invert", Clear bv_invert, "\tDisables invertibility conditions for BV (default is false, i.e. invertibility conditions are computed)");
-  ("-mcsat",    Unit(fun () -> force_fail(); ysolver := Some `MCSAT), "\t\tForces usage of MCSAT");
-  ("-cdclT",    Unit(fun () -> force_fail(); ysolver := Some `CDCLT), "\t\tForces usage of CDCL(T)");
-  ("-cdclT-mcsat", Int(fun s -> force_fail(); cdclT_mcsat := float_of_int s), "X \tIn BV: tries CDCL(T) for up to X seconds, then switches to MCSAT; no effect if logic is not BV");
+  ("-under",          Int(fun u -> underapprox := u), "\t\tDesired number of underapproximations in SAT answers (default is 1)");
+  ("-no_bv_invert",   Clear bv_invert, "\tDisables invertibility conditions for BV (default is false, i.e. invertibility conditions are computed)");
+  ("-auto_portfolio", Int(fun t -> timeout := Some(float_of_int t)) , "S\tTriggers sequential auto-portfolio anticipating timeout of S seconds");
+  ("-mcsat",    Unit set_mcsat, "\t\tSets solver as MCSAT");
+  ("-cdclT",    String set_cdclT, "S\t\tSets solver as CDCL(T) modeling input assignments on arithmetic or bitvector types as equality assumptions (S = \"Eq\") or inequality assumptions (otherwise)");
+  ("-seed",     Int set_seed, "S\t\tSets random seed to S");
+  ("-switch",   Int switch, "T \t\tAfter T seconds, switch to new run using lastly set solver and seed");
+  ("-switch_seeds", Tuple [Int (fun i -> switch_after := float_of_int i); Int switch_seeds], "T N\tEvery T seconds, for N times, increment the seed and switch to new run using lastly set solver and incremented seed");
 ]@Tracing.options;;
 
 Arg.parse options (fun a->args := a::!args) description;;
+ysolver := !init_solver;;
+yseed := Option.get_or ~default:0 !init_seed;;
 Tracing.compile();;
 
 match !args with

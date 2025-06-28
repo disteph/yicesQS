@@ -87,7 +87,7 @@ let param_from_seed i logic mode =
 
 let () = Global.init()
 let current_param = ref None
-
+let as_inequalities = false
 
 (* exception TimeToSwitch of [`CDCLT | `MCSAT] * int *)
 
@@ -129,7 +129,7 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
     let status =
       match support with
       | Empty -> print "solve" 0 ".%i%!" level.id; Context.check ~param:(Option.get_exn_or "No parameter" !current_param) context
-      | S _   -> print "solve" 0 ".%i" level.id; Context.check ~param:(Option.get_exn_or "No parameter" !current_param) context
+      | S _   -> print "solve" 0 ".%i" level.id; Context.check ~as_inequalities ~param:(Option.get_exn_or "No parameter" !current_param) context
                                 ~smodel:(SModel.make model ~support:(Support.list support))
     in
     match status with
@@ -383,40 +383,47 @@ let setmode config = Config.set config ~name:"mode" ~value:"push-pop"
 let setmode config = Config.set config ~name:"mode" ~value:"multi-checks"
 [%%endif]
 
-let events = ref []
+
 
 let create_events logic =
-  let create_pool mode n =
-    for i = 0 to n-1 do
-      events := (5.0, mode, i+1)::!events (* After 2 seconds, switch to mode with seed i *)
-    done
+  let auto_portfolio, timeout =
+    match !timeout, !events with
+    | Some timeout, [] -> true, timeout
+    | _ -> false, 0.
   in
-  let mcsat_cdclT() =
-    create_pool `MCSAT 10;
-    events := (!cdclT_mcsat, `CDCLT, 0)::!events; (* After a while, switch to MCSAT with seed 0 *)
-    create_pool `CDCLT 10
-  in
-  let cdclT_mcsat() =
-    create_pool `CDCLT 10;
-    events := (!cdclT_mcsat, `MCSAT, 0)::!events; (* After a while, switch to MCSAT with seed 0 *)
-    create_pool `MCSAT 10
-  in
-  let _cdclT() =
-    create_pool `CDCLT 20;
-  in
-  let mcsat() =
-    create_pool `MCSAT 20;
-  in
-  let () =
-  match logic with
-  | `NRA | `NIA -> mcsat() 
-  | `LRA | `LIA -> mcsat_cdclT()
-  | `BV -> cdclT_mcsat()
-  | `Other -> ()
-  in
-  events := List.rev !events
-
-
+    let small_switch = 5. *. timeout /. 1200. in
+    let big_switch = 700. *. timeout /. 1200. in
+    let mcsat_cdclT ass () =
+      if auto_portfolio then
+      (create_pool (Some `MCSAT) small_switch 10;
+        events := (big_switch, Some (`CDCLT ass), 0)::!events; (* After a while, switch to CDCLT with seed 0 *)
+        create_pool (Some (`CDCLT ass)) small_switch 10);
+      `MCSAT
+    in
+    let cdclT_mcsat ass () =
+      if auto_portfolio then
+      (create_pool (Some (`CDCLT ass)) small_switch 10;
+        events := (big_switch, Some `MCSAT, 0)::!events; (* After a while, switch to MCSAT with seed 0 *)
+        create_pool (Some `MCSAT) small_switch 10);
+      `CDCLT ass
+    in
+    let _cdclT ass () =
+      if auto_portfolio then
+        create_pool (Some (`CDCLT ass)) small_switch 20;
+      `CDCLT ass
+    in
+    let mcsat() =
+      if auto_portfolio then
+        create_pool (Some `MCSAT) small_switch 20;
+      `MCSAT
+    in
+    match logic with
+    | `NRA | `NIA -> Option.get_lazy mcsat !ysolver
+    | `LRA | `LIA -> Option.get_lazy (cdclT_mcsat `Eq) !ysolver
+    (*| `LRA | `LIA -> Option.get_lazy (mcsat_cdclT `Eq) !ysolver *)
+    | `BV ->  Option.get_lazy (cdclT_mcsat `Eq) !ysolver
+    | `Other -> `MCSAT
+  
 
 let set_config mcsat =
   let cfg = Config.malloc () in
@@ -502,15 +509,8 @@ let treat filename =
         | "set-logic",  [Atom l]            ->
            print "treat" 3 "@[Setting logic to %s@]@," l;
            logic := SolverState.parse_logic l;
-           let mcsat =
-             match !Command_options.ysolver, !logic with
-             | Some mode, _ -> mode
-             | None, `BV -> `CDCLT
-             | None, _ -> `MCSAT
-           in
-           create_events !logic;
-           mode := mcsat;
-           config := Some(set_config mcsat)
+           mode := create_events !logic;
+           config := Some(set_config !mode)
 
         | "check-sat", [] ->
            begin
@@ -528,6 +528,7 @@ let treat filename =
                 print "treat" 1 "@[<v>";
                 Timer.start timer;
                 current_param := Some (param_from_seed 0 !logic !mode);
+                events := List.rev !events;
                 let rec check_sat config = 
                     let state = SolverState.create ~logic:!logic config game in
                     let f () =
@@ -535,7 +536,7 @@ let treat filename =
                     in
                     match !events with
                     | [] -> f()
-                    | (timeout_sec,mode,random_seed)::rest -> 
+                    | (timeout_sec,newmode,random_seed)::rest -> 
                       let stop () =
                         SolverState.stop state;
                         Atomic.set cancel_flag true
@@ -543,14 +544,17 @@ let treat filename =
                       match run_with_timeout ~timeout_sec ~stop f with
                       | Some a -> a
                       | None -> 
-                    print "counter" 1 "@[<v>SWITCH TO %s with random seed %i@]@,"
-                      (match mode with `MCSAT -> "MCSAT" | `CDCLT -> "CDCLT")
-                      random_seed;
-                    Param.free (Option.get_exn_or "No param" !current_param);
-                    current_param := Some(param_from_seed random_seed !logic mode);
-                    events := rest;
-                    Atomic.set cancel_flag false;
-                    check_sat (set_config mode)
+                        let newmode = Option.get_or ~default:!mode newmode in
+                        print "counter" 1 "@[<v>SWITCH TO %s with random seed %i@]@,"
+                          (match newmode with 
+                            | `MCSAT -> "MCSAT" 
+                            | `CDCLT _ -> "CDCLT")
+                          random_seed;
+                        Param.free (Option.get_exn_or "No param" !current_param);
+                        current_param := Some(param_from_seed random_seed !logic newmode);
+                        events := rest;
+                        Atomic.set cancel_flag false;
+                        check_sat (set_config newmode)
                 in
                 let answer, state = check_sat config in
                 print "treat" 1 "@]@,";
