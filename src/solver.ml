@@ -396,7 +396,8 @@ let create_events logic =
     match logic with
     | `NRA | `NIA ->
       if auto_portfolio then
-        create_pool (Some `MCSAT) small_switch 20;
+        (events := (24.5/.1200. *. timeout, Some `MCSAT, 0)::!events;
+        create_pool (Some `MCSAT) small_switch 20);
       `MCSAT
 
     | `LRA -> 
@@ -411,7 +412,8 @@ let create_events logic =
 
     | `BV ->
       if auto_portfolio then
-        (create_pool (Some (`CDCLT `Eq)) small_switch 10;
+        (events := (24.5/.1200. *. timeout, Some (`CDCLT `Eq), 0)::!events;
+        create_pool (Some (`CDCLT `Eq)) small_switch 10;
         events := (700./.1200. *. timeout, Some `MCSAT, 0)::!events; (* After a while, switch to MCSAT with seed 0 *)
         create_pool (Some `MCSAT) small_switch 10);
       `CDCLT `Eq
