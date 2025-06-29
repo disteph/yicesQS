@@ -77,6 +77,8 @@ let next_check = ref 10
 let last_time = ref 0.0
 let check_interval = 1.0
 
+let () = Global.init()
+
 let rec solve ?(compute_over=true) state level model support : answer*SolverState.t =
   let (module S:SolverState.T) = state in
   if Float.(!cdclT_mcsat > 0.0)
@@ -409,7 +411,7 @@ let treat filename =
              match !Command_options.ysolver with
              | Some `MCSAT -> true
              | Some `CDCLT -> false
-             | None -> not(String.equal "BV" l)
+             | None -> not(String.equal "BV" l || String.equal "LIA" l)
            in
            config := Some(set_config mcsat)
 
