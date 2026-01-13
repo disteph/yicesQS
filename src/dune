@@ -1,9 +1,23 @@
 (executable
  (name main)
  (libraries sexplib containers zarith tracing timer yices2)
- (flags (:standard -cclib -lyices))
  (promote (until-clean) (into ".."))
  (preprocess (pps ppx_optcomp ppx_deriving.std))
+ (preprocessor_deps (file debug.mlh))
 )
 
-(env (dev (flags (:standard -warn-error -A))))
+(env
+ (dev
+  (flags (:standard -warn-error -A))
+  (link_flags (:standard -cclib -lyices)))
+ (release
+  (link_flags (:standard -cclib -lyices)))
+ (static
+  (link_flags
+   (:standard
+    -cclib -Wl,-Bstatic
+    -cclib -lyices
+    -cclib -lpoly
+    -cclib -lcudd
+    -cclib -lgmp
+    -cclib -Wl,-Bdynamic))))

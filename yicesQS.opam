@@ -15,6 +15,7 @@ depends: [
   "containers"  {>= "3.0.0"}
   "tracing"
   "timer"
+  "tyre"
   "yices2_bindings"
 ]
 build: [

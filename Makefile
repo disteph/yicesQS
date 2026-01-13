@@ -1,4 +1,4 @@
-.PHONY: default build install debug uninstall test NRA LRA BV oldBV clean
+.PHONY: default build static install debug uninstall test NRA LRA BV oldBV clean
 
 export OCAMLRUNPARAM = b
 
@@ -9,6 +9,13 @@ debug:
 
 build:
 	dune build
+
+static:
+	@if [ "$$(uname -s)" = "Darwin" ]; then \
+		echo "make static is not supported on macOS (ld lacks -Bstatic/-Bdynamic)"; \
+		exit 1; \
+	fi
+	dune build --profile static
 
 clean:
 	dune clean
