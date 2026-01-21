@@ -5,8 +5,15 @@ open Utils
 
 module HTerms = Types.HTerms
 
+(* build_table model oldvar newvar:
+   - model: current assignment used to read variable values
+   - oldvar: rigid variables that can be used as substitutions
+   - newvar: variables to eliminate (we only care about their values)
+   Returns a table mapping each value taken by a newvar to the list of oldvar
+   that share that value in the model. *)
 let build_table model oldvar newvar =
   let tbl = HTerms.create (List.length newvar * 10) in
+  (* treat_new var: record the value of a variable to eliminate as a table key. *)
   let treat_new var =
     let value = Model.get_value_as_term model var in
     match HTerms.find_opt tbl value with
@@ -14,6 +21,8 @@ let build_table model oldvar newvar =
     | None   -> HTerms.add tbl value []
   in
   List.iter treat_new newvar;
+  (* treat_old var: if a rigid variable has a value already in the table,
+     add the variable to the bucket for that value. *)
   let treat_old var =
     let value = Model.get_value_as_term model var in
     match HTerms.find_opt tbl value with
@@ -23,8 +32,15 @@ let build_table model oldvar newvar =
   List.iter treat_old oldvar;
   tbl
 
+(* A substitution list plus epsilon constraints accumulated during elimination. *)
 type subst = (Term.t * Term.t) list WithEpsilons.t
 
+(* generalize_model model ~true_of_model ~rigid_vars ~newvars:
+   - model: model satisfying true_of_model
+   - true_of_model: quantifier-free formula that holds in model
+   - rigid_vars: variables that must remain in the result
+   - newvars: variables to eliminate
+   Returns a lazy list of generalized formulas, each with optional epsilons. *)
 let generalize_model model ~true_of_model ~rigid_vars ~newvars =
 
   (* Then we build a table:
@@ -35,6 +51,9 @@ let generalize_model model ~true_of_model ~rigid_vars ~newvars =
   let open CLL in
   (* aux1 takes the list of variables t eliminate.
      The output is a costed lazy list of substitutions. *)
+  (* aux1 list:
+     - list: variables to eliminate
+     Produces a lazy list of substitutions for those variables. *)
   let rec aux1 list : subst CLL.t = match list with
     | []              -> [] |> WithEpsilons.return |> CLL.return
     | var::other_vars -> (* var is a variable to eliminate *)
@@ -64,6 +83,9 @@ let generalize_model model ~true_of_model ~rigid_vars ~newvars =
          We need to extend it with a substitution for var.
          We turn all of the rigid variables that have the same value as var
          into a costed lazy list with no cost between elements. *)
+      (* aux2 list:
+         - list: candidate rigid variables with the same value as var
+         Converts that list to a lazy list of substitution candidates. *)
       let rec aux2 : Term.t list -> Term.t WithEpsilons.t CLL.t = function
         | []   -> LazyList.empty
         | t::l -> lazy(`Cons((WithEpsilons.return t,0), aux2 l))
@@ -86,6 +108,12 @@ let generalize_model model ~true_of_model ~rigid_vars ~newvars =
       epsilons = epsilons @ Term.subst_terms subst true_of_model.epsilons
     }
 
+(* denum_elim model t:
+   - model: used to evaluate denominators
+   - t: term to rewrite
+   Rewrites rational division into multiplication by the inverse of the
+   model-evaluated denominator. If the denominator is 0, it raises
+   Division_by_zero so callers can fall back to a safer path. *)
 let rec denum_elim model t =
   match Term.reveal t with
   | Term(A0 _) -> t
@@ -98,6 +126,13 @@ let rec denum_elim model t =
        Term.Arith.mul cst num
   | Term b -> Term.(build(map (denum_elim model) b))
 
+(* generalize_model ~logic model ~true_of_model ~rigid_vars ~newvars:
+   - logic: target theory; selects the generalization strategy
+   - model: model satisfying true_of_model
+   - true_of_model: quantifier-free formula to generalize
+   - rigid_vars: variables to keep
+   - newvars: variables to eliminate
+   Chooses between projection, invertibility conditions, or substitution. *)
 let generalize_model ~logic model ~true_of_model ~rigid_vars ~newvars
     : Term.t WithEpsilons.t CLL.t =
   match logic with
@@ -108,19 +143,24 @@ let generalize_model ~logic model ~true_of_model ~rigid_vars ~newvars
     ->
      begin
        try
+         (* For LRA/NRA, try Yices projection after eliminating risky divisions. *)
          let true_of_model = denum_elim model true_of_model in
          Model.generalize_model model true_of_model newvars `YICES_GEN_BY_PROJ
          |> Term.andN |> fun x -> CLL.return(WithEpsilons.return x)
        with _ ->
+         (* Fall back to substitution-based generalization on failure. *)
          generalize_model model
            ~true_of_model:(WithEpsilons.return true_of_model) ~rigid_vars ~newvars
      end
   | `BV when !Command_options.bv_invert ->
+     (* For BV, optionally apply invertibility conditions before substitution. *)
      (* First, we try to eliminate as many variables as we can by invertibility conditions *)
      let ic = IC.solve_all newvars true_of_model in
      print "generalize_model" 3 "@[<v2>Formula sent to IC is %a@]@," Term.pp true_of_model;
      print "generalize_model" 3 "@[<v2>Formula returned by IC is %a@]@," Term.pp WithEpsilons.(ic.main);
      generalize_model model ~true_of_model:ic ~rigid_vars ~newvars
      
-  | _ -> generalize_model model
-           ~true_of_model:(WithEpsilons.return true_of_model) ~rigid_vars ~newvars
+  | _ ->
+     (* Default: substitution-based generalization for other logics. *)
+     generalize_model model
+       ~true_of_model:(WithEpsilons.return true_of_model) ~rigid_vars ~newvars
