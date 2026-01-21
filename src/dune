@@ -1,5 +1,6 @@
 (rule
  (targets debug.mlh)
+ (mode (promote (until-clean)))
  (action
   (with-stdout-to %{targets}
    (run sh -c

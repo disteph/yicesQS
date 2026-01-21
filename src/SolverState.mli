@@ -9,9 +9,9 @@ module type T = sig
     include Game.T
     val logic    : logic
     val qf_logic : string
-    val context  : Context.t
+    val context  : Context.t (* SMA/MBO context for LF(root) (Def. 8). *)
 [%%if debug_mode]
-    val epsilons_context : Context.t
+    val epsilons_context : Context.t (* Debug-only MBU epsilon checks (Def. 4). *)
 [%%endif]
   end
 

@@ -1,5 +1,9 @@
 [%%import "debug.mlh"]
 
+(* SolverState wires the QSMA-tree (Def. 1) to Yices contexts that implement
+   SMA/MBO (Sec. 4) and store LF(root) (Def. 8) plus learned U lemmas
+   (Def. 4, Alg. 4 line 16). *)
+
 open Containers
 
 open Sexplib
@@ -15,9 +19,9 @@ module type T = sig
   include Game.T
   val logic             : logic
   val qf_logic          : string
-  val context           : Context.t (* Main context for the solver *)
+  val context           : Context.t (* SMA/MBO context for LF(root) (Def. 8). *)
   [%%if debug_mode]
-  val epsilons_context  : Context.t (* context with only epsilon term constraints at level 0 *)
+  val epsilons_context  : Context.t (* Debug: epsilon constraints from MBU (Def. 4). *)
 [%%endif]
 (* val learnt : Term.t list ref *)
 end
@@ -65,6 +69,7 @@ let create ~logic config (module G : Game.T) =
      let epsilons_context = Context.malloc ~config ()
 [%%endif]
      let context          = Context.malloc ~config ()
+     (* Context asserts LF(root) plus proxy constraints (Def. 8). *)
      let () = Context.assert_formula context ground
      let () = Context.assert_formulas context (Seq.to_list existentials)
      let () = Context.assert_formulas context (Seq.to_list universals)
@@ -80,6 +85,7 @@ let epsilon_assert _ _ = ()
 let learn (module S : T) lemmas =
   (* learnt := List.append lemma !S.learnt; *)
   print "learn" 0 "@[<2>Learning %a@]@," (List.pp Term.pp) lemmas;
+  (* Learn under-approximation lemmas U (Def. 4, Alg. 4 line 16). *)
   Context.assert_formulas S.context lemmas
 
 let record_epsilons ((module S : T) as state) epsilons =

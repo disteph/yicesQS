@@ -5,6 +5,9 @@ open Utils
 
 module HTerms = Types.HTerms
 
+(* Implements the model-based under-approximation function MBU (Def. 4),
+   returned as formulas U for OptiQSMA (Alg. 4, line 10). *)
+
 (* build_table model oldvar newvar:
    - model: current assignment used to read variable values
    - oldvar: rigid variables that can be used as substitutions
@@ -40,7 +43,8 @@ type subst = (Term.t * Term.t) list WithEpsilons.t
    - true_of_model: quantifier-free formula that holds in model
    - rigid_vars: variables that must remain in the result
    - newvars: variables to eliminate
-   Returns a lazy list of generalized formulas, each with optional epsilons. *)
+   Returns a lazy list of generalized formulas U (Def. 4), each with
+   optional epsilon constraints. *)
 let generalize_model model ~true_of_model ~rigid_vars ~newvars =
 
   (* Then we build a table:
@@ -132,7 +136,8 @@ let rec denum_elim model t =
    - true_of_model: quantifier-free formula to generalize
    - rigid_vars: variables to keep
    - newvars: variables to eliminate
-   Chooses between projection, invertibility conditions, or substitution. *)
+   Implements MBU (Def. 4) using projection, invertibility conditions,
+   or substitution depending on the theory. *)
 let generalize_model ~logic model ~true_of_model ~rigid_vars ~newvars
     : Term.t WithEpsilons.t CLL.t =
   match logic with

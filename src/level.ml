@@ -3,7 +3,7 @@ open Ext
 
 open Utils
 
-type t = { (* See comments in mli *)
+type t = { (* See comments in mli for Def. 1/2/8 references. *)
     id : int;
     ground  : Term.t;
     rigid   : Term.t list;
