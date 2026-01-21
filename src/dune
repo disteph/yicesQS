@@ -1,3 +1,10 @@
+(rule
+ (targets debug.mlh)
+ (action
+  (with-stdout-to %{targets}
+   (run sh -c
+     "if [ \"%{profile}\" = \"debug\" ]; then echo '[%%define debug_mode true]'; else echo '[%%define debug_mode false]'; fi"))))
+
 (executable
  (name main)
  (libraries sexplib containers zarith tracing timer yices2)

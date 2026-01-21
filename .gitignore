@@ -32,3 +32,6 @@ _opam/
 # MacOS
 .zprofile.log
 .DS_Store
+
+# Generated debug flag
+src/debug.mlh

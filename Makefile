@@ -5,7 +5,7 @@ export OCAMLRUNPARAM = b
 default: build
 
 debug:
-	dune build
+	dune build --profile debug
 
 build:
 	dune build
