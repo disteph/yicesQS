@@ -45,6 +45,5 @@ and pp_foralls fmt foralls =
 
 let rec free level =
   Seq.iter free_forall level.foralls
-and free_forall {selector_context; sublevel; _} =
-  Context.free selector_context;
+and free_forall {sublevel; _} =
   free sublevel

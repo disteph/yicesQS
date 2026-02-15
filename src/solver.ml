@@ -39,14 +39,8 @@ module Support = struct
 end
 
 type answer =
-  (* Unsat carries an over-approximation reason O (Def. 5, via MBO/model
-     interpolant). Sat carries under-approximation reasons U (Def. 4, via
-     MBU) plus the witnessing model. *)
   | Unsat of Term.t
-  | Sat of {
-      reasons : Term.t list;
-      model : Model.t [@opaque];
-    }
+  | Sat of Term.t list
 [@@deriving show { with_path = false }]
 
 (* Debug-only consistency checks. *)
@@ -57,21 +51,21 @@ exception WrongAnswer        of SolverState.t * answer
 
 [%%if debug_mode]
 
-(* check state level model support reason:
+(* check state level smodel support reason:
    - state: current solver state (contexts/config/logic)
    - level: level whose model we are checking
-   - model: model returned by Yices
+   - smodel: model returned by Yices
    - support: terms whose values are fixed in the check
    - reason: formula that should be true in model
    Debug helper to validate U (Def. 4) returned by MBU. *)
-let check state level model support reason =
+let check state level smodel support reason =
   let (module S:SolverState.T) = state in
   print "check" 3 "@[<v2>Checking that our model %a@,satisfies reason %a@]@,"
-    (SModel.pp()) (SModel{ model; support })
+    (SModel.pp()) (SModel.with_support support smodel)
     Term.pp reason;
   Context.push S.epsilons_context;
   Context.assert_formula S.epsilons_context (Term.not1 reason);
-  match Context.check S.epsilons_context ~smodel:(SModel.make model ~support) with
+  match Context.check S.epsilons_context ~smodel:(SModel.with_support support smodel) with
   | `STATUS_SAT   ->
     print "check" 3 "@[<v2>It does not satisfy it@]@,";
     raise (BadUnder(state, level, reason))
@@ -80,11 +74,11 @@ let check state level model support reason =
     Context.pop S.epsilons_context
   | _ -> assert false
 
-(* check_interpolant state level model interpolant context:
+(* check_interpolant state level smodel interpolant context:
    - interpolant must be false in model and must be a valid interpolant
    when it is the constant false. Debug helper for O (Def. 5). *)
-let check_interpolant state level model interpolant context =
-  if (Model.get_bool_value model interpolant)
+let check_interpolant state level smodel interpolant context =
+  if (SModel.formula_true_in_model smodel interpolant)
   then raise (BadInterpolant(state, level, interpolant));
   if Term.(equal interpolant (false0()))
      && not(Types.equal_smt_status (Context.check context) `STATUS_UNSAT)
@@ -92,9 +86,9 @@ let check_interpolant state level model interpolant context =
 
 [%%else]
 
-let check _state _level _model _support _reason = ()
+let check _state _level _smodel _support _reason = ()
 
-let check_interpolant _state _level _model _interpolant _context = ()
+let check_interpolant _state _level _smodel _interpolant _context = ()
 
 [%%endif]
 
@@ -108,15 +102,15 @@ let check_interval = 1.0
 
 let () = Global.init()
 
-(* solve ?compute_over state level model support:
+(* solve ?compute_over state level smodel support:
    - compute_over: if true, compute a model interpolant on UNSAT
    - state: solver state (contexts, logic, counters)
    - level: current game level to solve
-   - model: model from parent level (or empty model at top)
+   - smodel: model from parent level (or empty model at top)
    - support: terms fixed in model when checking the level
    Implements optiSubtreeIsSolved (Alg. 4) for node level, with support
    = Rigid(level) (Def. 1/3). Returns SAT(U) or UNSAT(O) as in Alg. 4. *)
-let rec solve ?(compute_over=true) state level model support : answer*SolverState.t =
+let rec solve ?(compute_over=true) state level smodel support : answer*SolverState.t =
   let (module S:SolverState.T) = state in
   if Float.(!cdclT_mcsat > 0.0)
      && (not(Context.is_mcsat S.context))
@@ -137,14 +131,14 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
   try
     print "solve" 1 "@[<v2>Solving game:@,%a@,@[<2>from model@ %a@]@]@,"
       Level.pp level
-      (SModel.pp()) (SModel{ model; support = Support.list support });
+      (SModel.pp()) (SModel.with_support (Support.list support) smodel);
 
     print "solve" 4 "@[Trying to solve over-approximations@]@,";
     let status =
       match support with
       | Empty -> print "solve" 0 ".%i%!" level.id; Context.check context
       | S _   -> print "solve" 0 ".%i" level.id; Context.check context
-                                ~smodel:(SModel.make model ~support:(Support.list support))
+                                ~smodel:(SModel.with_support (Support.list support) smodel)
     in
     match status with
 
@@ -155,7 +149,7 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
         | S _ when compute_over ->
            print "disabled" 0 "@[Overapproximation@]@,";
            let interpolant = Context.get_model_interpolant context in
-           check_interpolant state level model interpolant context;
+           check_interpolant state level smodel interpolant context;
            Term.(not1 interpolant)
         | _ -> print "disabled" 0 "@[No overapproximation@]@,"; Term.true0()
       in
@@ -167,13 +161,12 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
     | `STATUS_SAT ->
       (* SMA found an extension M' satisfying the current LF(level) context
          (Def. 8). We now check |=la (Def. 11) against forall subgames. *)
-      let original_model = model in
-      let SModel{ model; _ } = Context.get_model context ~keep_subst:true in
+      let smodel = Context.get_model context ~keep_subst:true in
       print "model" 0 "@[Found model of over-approx @,@[<v 2>  %a@]@]@,%!"
         (SModel.pp())
-        (SModel{support = List.append level.newvars (Support.list support); model });
+        (SModel.with_support (List.append level.newvars (Support.list support)) smodel);
 
-      post_process ~compute_over state level original_model model support
+      post_process ~compute_over state level smodel support
 
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
@@ -182,39 +175,36 @@ let rec solve ?(compute_over=true) state level model support : answer*SolverStat
     ExceptionsErrorHandling.YicesException(_,report) ->
     raise (FromYicesException(state, level,report, Printexc.get_backtrace()))
 
-(* post_process ~compute_over state level original_model model support:
+(* post_process ~compute_over state level smodel support:
    - compute_over: same flag passed to solve
    - state: solver state
    - level: current level
-   - original_model: model passed into solve (used if we need to retry)
-   - model: model returned by Context.get_model for this level
+   - smodel: model returned by Context.get_model for this level
    - support: current support
    If the model is good, return SAT(U) with under-approx reasons (Def. 4/Alg. 4
-   line 10). Otherwise, free it and retry solve with the original model. *)
-and post_process ~compute_over state level original_model model support =
+   line 10). Otherwise, retry solve with the current model. *)
+and post_process ~compute_over state level smodel support =
   print "indent" 0 "@[<v 1> ";
-  let result = treat_sat state level model support in
+  let result = treat_sat state level smodel support in
   print "indent" 0 "@]@,%!";
   match result with
   | Some underapprox ->
      if List.is_empty underapprox
      then print "disabled" 0 "@[No underapproximation@]@,"
      else print "disabled" 0 "@[Underapproximation@]@,";
-     Sat { reasons = underapprox; model }, state
+     Sat underapprox, state
 
-  | None ->
-    Model.free model;
-    (solve[@tailcall]) ~compute_over state level original_model support
+  | None -> (solve[@tailcall]) ~compute_over state level smodel support
 
-(* treat_sat state level model support:
+(* treat_sat state level smodel support:
    - state: solver state
    - level: current game level
-   - model: candidate model for this level
+   - smodel: candidate model for this level
    - support: which terms are fixed from above
    Implements solutionForallDescendants (Alg. 4) using FAN/NAN
    (Defs. 9/10). Returns Some under-approx reasons if the model satisfies
    all foralls (i.e., |=la holds), otherwise None to force a retry. *)
-and treat_sat state level model support =
+and treat_sat state level smodel support =
   let (module S:SolverState.T) = state in
 
   (* Under-approximation (Def. 4) is only meaningful if we came with a
@@ -225,14 +215,14 @@ and treat_sat state level model support =
     | S _   -> true
   in
   (* Now we look at each forall formula that we have to satisfy, one by one *)
-  (* aux model cumulated_support reasons foralls:
-     - model: current candidate model
+  (* aux smodel cumulated_support reasons foralls:
+     - smodel: current candidate model
      - cumulated_support: terms fixed so far (incl. triggers)
      - reasons: accumulated reasons why foralls are satisfied
      - foralls: remaining forall opponents to check
      Traverses the current level's forall opponents (Def. 1/2) and
      mimics FAN/NAN filtering (Defs. 9/10). *)
-  let rec aux model cumulated_support reasons foralls =
+  let rec aux smodel cumulated_support reasons foralls =
     match foralls() with
 
     (* We have satisfied all forall formulae; our model is good. *)
@@ -250,7 +240,7 @@ and treat_sat state level model support =
            (* print "solve" 0 "@,%a" (List.pp Term.pp) Level.(level.newvars); *)
            QF_API.generalize_model
              ~logic:S.logic
-             model
+             smodel
              ~true_of_model
              ~rigid_vars:Level.(level.rigid)
              ~newvars:   Level.(level.newvars)
@@ -284,14 +274,14 @@ and treat_sat state level model support =
 
     (* Here we have a forall formula o that is false in the model;
        the reason why we don't have to look at it is that o is false in the model. *)
-    | Seq.Cons(o, opponents) when not (Model.get_bool_value model Level.(o.name)) ->
+    | Seq.Cons(o, opponents) when not (SModel.formula_true_in_model smodel Level.(o.name)) ->
       print "solve" 4 "@[Level %i does not need to be looked at as %a is false@]@,"
         o.sublevel.id
         Term.pp o.name;
       (* o.name is the proxy b.p from Def. 1/2 (possibly polarity-flipped by
          preprocessing). If it is false, LF(level) forces LF(o.sublevel) (Def. 8),
          so we keep checking descendant foralls without recursion. *)
-      aux model
+      aux smodel
         (o.name::cumulated_support)
         (Term.not1 o.name::reasons)
         (Seq.append o.sublevel.foralls opponents)
@@ -313,27 +303,20 @@ and treat_sat state level model support =
 
       (* Now we produce the model to feed the recursive call and perform the call.
          We get back the status of the call *)
-      let recurs_status =
-        (* if Model.get_bool_value model o.selector
-         * then (\* The selector for this subformula is already true *\)
-         *   (print "solve" 4 "@[Model already makes %a true, we stick to the same model@]@,"
-         *      Term.pp o.selector;
-         *    post_process state o.sublevel model recurs_support, model)
-         * else *)
+        let recurs_status =
         (* We extend the model by setting the selector to true *)
         let status =
           Context.check o.selector_context
-            ~smodel:(SModel.make model ~support:o.sublevel.rigid)
+            ~smodel:(SModel.with_support o.sublevel.rigid smodel)
         in
         (* This should always work *)
         assert(Types.equal_smt_status status `STATUS_SAT);
         (* This is the extended model *)
-        let SModel{ model = recurs_model ; _} =
+        let recurs_smodel =
           Context.get_model o.selector_context ~keep_subst:true
         in
-        let r = solve ~compute_over:compute_under state o.sublevel recurs_model recurs_support in
-        Model.free recurs_model;
-        r
+        solve ~compute_over:compute_under state o.sublevel recurs_smodel recurs_support
+
       in
       (* elim_trigger eliminates the trigger variable from the explanations given by the
          recursive call *)
@@ -351,15 +334,15 @@ and treat_sat state level model support =
             let reason = elim_trigger reason in
             print "solve" 4 "@[Reason's projection is %a@]@," Term.pp reason;
             (* ...and check that our current model indeed satisfies it. *)
-            check state level model o.sublevel.rigid reason;
+            check state level smodel o.sublevel.rigid reason;
             (* next moves on to the next opponent;
                with a cumulated support and a model that may updated with what we've learnt. *)
-            let next cumulated_support model =
+            let next cumulated_support smodel =
               (* we add the reason and continue with the next opponents *)
-              aux model cumulated_support (reason::reasons) opponents
+              aux smodel cumulated_support (reason::reasons) opponents
             in
             match opponents with
-            | _ -> next cumulated_support model (* This was the last opponent. *)
+            | _ -> next cumulated_support smodel (* This was the last opponent. *)
           (* | _ -> *)
           (*   (\* If there is another opponent coming, we may want to update our current model *)
           (*      according to the lemmas we've learnt from the recursive call *)
@@ -385,20 +368,19 @@ and treat_sat state level model support =
           (*     None *)
           (*   | _             -> assert false *)
           else
-            aux model cumulated_support reasons opponents
+            aux smodel cumulated_support reasons opponents
         end
-      | Sat { reasons; model = rec_model } ->
+      | Sat reasons ->
         print "solve" 4 "@[<v2>Back to level %i, we see from level %i answer Sat with reasons@,@[%a@]@]@,"
           level.id
           o.sublevel.id
           (List.pp Term.pp) reasons;
         assert(List.length reasons > 0);
-        Model.free rec_model;
         (* The sublevel found a SAT model for the negated subformula; update
            our context as in Alg. 4 line 16 (b.U <- b.U or U). *)
         let aux reason =
           let reason = elim_trigger reason in
-          check state level model o.sublevel.rigid reason;
+          check state level smodel o.sublevel.rigid reason;
           let lemma = Term.(o.name ==> not1 reason) in
           SolverState.learn state [lemma]
         in
@@ -411,7 +393,7 @@ and treat_sat state level model support =
     | S{ trigger; _ } -> [trigger]
     | Empty -> [] (* otherwise we just keep those values *)
   in
-  aux model cumulated_support [] level.foralls
+  aux smodel cumulated_support [] level.foralls
 
 [%%if debug_mode]
 (* return state answer expected:
@@ -456,15 +438,6 @@ let set_config mcsat =
   setmode cfg;
   cfg
 
-(* free session:
-   - session: SMT2 parsing session that may own a cached model
-   Ensures any cached model is freed. *)
-let free session =
-  let open Session in
-  match !(session.model) with
-  | Some(SModel{ model; _ }) -> Model.free model
-  | None -> ()
-
 
 (* treat filename:
    - filename: SMT-LIB2 file to parse and solve
@@ -479,7 +452,6 @@ let treat filename =
   let expected   = ref None in
   let assertions = ref [] in
   let states     = ref [] in
-  let empty_model = Model.empty () in
   (* treat sexp:
      - sexp: top-level SMT-LIB2 command
      Handles a subset of commands directly and defers the rest to SMT2 parser. *)
@@ -509,10 +481,6 @@ let treat filename =
 
         | "assert", [formula] ->
           let formula = ParseTerm.parse session formula |> Yices2.SMT2.Cont.get in
-          (* Any new assertion invalidates the cached model. *)
-          (match !(session.model) with
-           | Some(SModel{ model; _ }) -> Model.free model
-           | None -> ());
           session.model := None;
           assertions := formula::!assertions
 
@@ -546,20 +514,14 @@ let treat filename =
                 let answer, state =
                   try
                     let state = SolverState.create ~logic:!logic config game in
-                    solve ~compute_over:false state G.top_level empty_model Support.Empty
+                    solve ~compute_over:false state G.top_level (SModel.empty()) Support.Empty
                   with
                     TimeToSwitch ->
                     print "counter" 1 "@[<v>SWITCH TO MCSAT@]@,";
                     let state = SolverState.create ~logic:!logic (set_config true) game in
-                    solve ~compute_over:false state G.top_level empty_model Support.Empty
+                    solve ~compute_over:false state G.top_level (SModel.empty()) Support.Empty
                 in
                 print "treat" 1 "@]@,";
-                free session;
-                (* Cache the model on SAT for get-model/get-value. *)
-                (match answer with
-                 | Sat { model; _ } ->
-                   session.model := Some (SModel.make ~support:(List.rev !support) model)
-                 | Unsat _ -> session.model := None);
                 let str = return state answer !expected in
                 Format.(fprintf stdout) "@[%s@]@," str;
                 states := state::!states;
@@ -577,7 +539,5 @@ let treat filename =
     | _ -> ParseInstruction.parse session sexp
   in
   List.iter treat sexps;
-  free session;
-  Model.free empty_model;
   print "treat" 1 "@[Exited gracefully@]@,";
   !states

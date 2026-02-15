@@ -23,10 +23,7 @@ end
 
 type answer =
   | Unsat of Term.t
-  | Sat of {
-      reasons : Term.t list;
-      model : Model.t [@opaque];
-    }
+  | Sat of Term.t list
 [@@deriving show { with_path = false }]
 
 exception BadInterpolant of SolverState.t * Level.t * Term.t

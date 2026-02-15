@@ -95,6 +95,5 @@ let record_epsilons ((module S : T) as state) epsilons =
   learn state epsilons
 
 let free (module G : T) =
-  Context.free G.context;
   Level.free G.top_level
     
