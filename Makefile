@@ -1,4 +1,4 @@
-.PHONY: default build static install install-deps opam-pins debug uninstall test NRA LRA BV oldBV clean
+.PHONY: default build static install install-deps opam-pins debug uninstall test static-test run-test NRA LRA BV oldBV clean
 
 export OCAMLRUNPARAM = b
 
@@ -50,7 +50,11 @@ static:
 clean:
 	dune clean
 
-test: build
+test: build run-test
+
+static-test: static run-test
+
+run-test:
 	time find regress -follow -name "*.smt2" -exec $(RUN_MAIN_EXE) {} +
 
 NRA:
