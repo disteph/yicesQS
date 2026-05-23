@@ -18,6 +18,10 @@ depends: [
   "tyre"
   "yices2_bindings"
 ]
+pin-depends: [
+  ["tracing.dev" "https://github.com/disteph/tracing/archive/refs/heads/main.zip"]
+  ["timer.dev" "https://github.com/disteph/timer/archive/refs/heads/main.zip"]
+]
 build: [
   make
 ]
