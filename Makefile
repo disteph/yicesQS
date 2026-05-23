@@ -37,10 +37,15 @@ build:
 
 static:
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
-		echo "make static is not supported on macOS (ld lacks -Bstatic/-Bdynamic)"; \
+		echo "make static is not supported on macOS (ld does not support fully static executables)"; \
 		exit 1; \
 	fi
 	dune build --profile static
+	@if command -v ldd >/dev/null 2>&1 && ldd main.exe 2>/dev/null | grep -q '=>'; then \
+		ldd main.exe; \
+		echo "make static did not produce a fully static executable"; \
+		exit 1; \
+	fi
 
 clean:
 	dune clean

@@ -23,9 +23,9 @@
  (static
   (link_flags
    (:standard
-    -cclib -Wl,-Bstatic
+    -ccopt -static
     -cclib -lyices
     -cclib -lpoly
     -cclib -lcudd
     -cclib -lgmp
-    -cclib -Wl,-Bdynamic))))
+    -cclib -lm))))
