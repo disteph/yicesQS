@@ -10,6 +10,8 @@ OPAM_LIBDIR ?= $(shell $(OPAM) var lib 2>/dev/null)
 OPAM_STUBLIBS ?= $(shell $(OPAM) var stublibs 2>/dev/null)
 RUNTIME_LIBRARY_PATHS ?= $(OPAM_LIBDIR):$(OPAM_STUBLIBS):/usr/local/lib
 RUN_WITH_LIBPATH = LD_LIBRARY_PATH="$(RUNTIME_LIBRARY_PATHS)$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}" DYLD_LIBRARY_PATH="$(RUNTIME_LIBRARY_PATHS)$${DYLD_LIBRARY_PATH:+:$$DYLD_LIBRARY_PATH}"
+RUN_MAIN_EXE = sh -c 'status=0; for file do echo "$$file"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$file" || status=1; done; exit $$status' sh
+RUN_MAIN_OLD_EXE = sh -c 'status=0; for file do echo "$$file"; $(RUN_WITH_LIBPATH) timeout 5 ./main-old.exe "$$file" || status=1; done; exit $$status' sh
 
 TRACING_PACKAGE ?= tracing.v0.17.0
 TRACING_PIN ?= https://github.com/disteph/tracing/archive/refs/heads/main.zip
@@ -44,16 +46,16 @@ clean:
 	dune clean
 
 test: build
-	time find regress -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c 'echo "$$1" && $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$1"' sh {}
+	time find regress -follow -name "*.smt2" -exec $(RUN_MAIN_EXE) {} +
 
 NRA:
-	time find ../SMTLib/NRA -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c 'echo "$$1" && $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$1"' sh {}
+	time find ../SMTLib/NRA -follow -name "*.smt2" -exec $(RUN_MAIN_EXE) {} +
 
 LRA:
-	time find ../SMTLib/LRA -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c 'echo "$$1" && $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$1"' sh {}
+	time find ../SMTLib/LRA -follow -name "*.smt2" -exec $(RUN_MAIN_EXE) {} +
 
 BV:
-	time find ../SMTLib/BV/2018-Preiner-cav18 -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c 'echo "$$1" && $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$1"' sh {}
+	time find ../SMTLib/BV/2018-Preiner-cav18 -follow -name "*.smt2" -exec $(RUN_MAIN_EXE) {} +
 
 oldBV:
-	time find ../SMTLib/BV/2018-Preiner-cav18 -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c 'echo "$$1" && $(RUN_WITH_LIBPATH) timeout 5 ./main-old.exe "$$1"' sh {}
+	time find ../SMTLib/BV/2018-Preiner-cav18 -follow -name "*.smt2" -exec $(RUN_MAIN_OLD_EXE) {} +
