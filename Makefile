@@ -6,6 +6,11 @@ OPAM ?= opam
 OPAM_PIN_FLAGS ?= --yes --no-action
 OPAM_INSTALL_FLAGS ?= --yes
 
+OPAM_LIBDIR ?= $(shell $(OPAM) var lib 2>/dev/null)
+OPAM_STUBLIBS ?= $(shell $(OPAM) var stublibs 2>/dev/null)
+RUNTIME_LIBRARY_PATHS ?= $(OPAM_LIBDIR):$(OPAM_STUBLIBS):/usr/local/lib
+RUN_WITH_LIBPATH = LD_LIBRARY_PATH="$(RUNTIME_LIBRARY_PATHS)$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}" DYLD_LIBRARY_PATH="$(RUNTIME_LIBRARY_PATHS)$${DYLD_LIBRARY_PATH:+:$$DYLD_LIBRARY_PATH}"
+
 TRACING_PACKAGE ?= tracing.v0.17.0
 TRACING_PIN ?= https://github.com/disteph/tracing/archive/refs/heads/main.zip
 TIMER_PACKAGE ?= timer.~dev
@@ -39,16 +44,16 @@ clean:
 	dune clean
 
 test: build
-	time find regress -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c "echo {} && timeout 5 ./main.exe {}"
+	time find regress -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c 'echo "$$1" && $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$1"' sh {}
 
 NRA:
-	time find ../SMTLib/NRA -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c "echo {} && timeout 5 ./main.exe {}"
+	time find ../SMTLib/NRA -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c 'echo "$$1" && $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$1"' sh {}
 
 LRA:
-	time find ../SMTLib/LRA -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c "echo {} && timeout 5 ./main.exe {}"
+	time find ../SMTLib/LRA -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c 'echo "$$1" && $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$1"' sh {}
 
 BV:
-	time find ../SMTLib/BV/2018-Preiner-cav18 -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c "echo {} && timeout 5 ./main.exe {}"
+	time find ../SMTLib/BV/2018-Preiner-cav18 -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c 'echo "$$1" && $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$1"' sh {}
 
 oldBV:
-	time find ../SMTLib/BV/2018-Preiner-cav18 -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c "echo {} && timeout 5 ./main-old.exe {}"
+	time find ../SMTLib/BV/2018-Preiner-cav18 -follow -name "*.smt2" -print0 | xargs -I{} -0 sh -c 'echo "$$1" && $(RUN_WITH_LIBPATH) timeout 5 ./main-old.exe "$$1"' sh {}

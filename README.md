@@ -87,6 +87,8 @@ export LD_LIBRARY_PATH=[UNCONVENTIONAL_PATHS]:/usr/local/lib
 export LDFLAGS="-L[UNCONVENTIONAL_PATH]"
 ```
 
+The `make test`, `make NRA`, `make LRA`, `make BV`, and `make oldBV` targets automatically add the active opam switch library directories and `/usr/local/lib` to the runtime library path. If Yices is installed somewhere else, set `RUNTIME_LIBRARY_PATHS` when running those targets.
+
 
 #### Quick Testing
 
