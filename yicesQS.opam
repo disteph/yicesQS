@@ -16,7 +16,6 @@ depends: [
   "tracing"
   "timer"
   "tyre"
-  "yices2"
 ]
 pin-depends: [
   ["tracing.v0.17.0" "https://github.com/disteph/tracing/archive/refs/heads/main.zip"]

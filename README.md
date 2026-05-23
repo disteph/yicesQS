@@ -38,11 +38,13 @@ Install [Yices version 2.6.4](https://yices.csl.sri.com/) and its dependencies [
 Besides Yices and its dependencies, YicesQS needs some OCaml dependencies and the Yices2 bindings. Assuming that the yices library (and the libraries it depends on) are present in the conventional directories (like `/usr/local/lib`), the OCaml libraries can all be installed by the following opam commands. 
 If for some reason this is not the case, follow the instructions for "Installing dependencies without opam".
 
+The Yices2 OCaml bindings must already be installed in the active opam switch. YicesQS does not ask opam to install them automatically because the public opam package can be stale for recent OCaml switches.
+
 First, run:
 
 ```
-opam pin tracing https://github.com/disteph/tracing/archive/refs/heads/main.zip
-opam pin timer https://github.com/disteph/timer/archive/refs/heads/main.zip
+opam pin tracing.v0.17.0 https://github.com/disteph/tracing/archive/refs/heads/main.zip
+opam pin timer.~dev https://github.com/disteph/timer/archive/refs/heads/main.zip
 ```
 
 Then, in the directory of this `README.md`, install (in findlib) the remaining OCaml dependencies with the following command:

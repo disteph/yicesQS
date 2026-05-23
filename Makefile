@@ -6,7 +6,9 @@ OPAM ?= opam
 OPAM_PIN_FLAGS ?= --yes --no-action
 OPAM_INSTALL_FLAGS ?= --yes
 
+TRACING_PACKAGE ?= tracing.v0.17.0
 TRACING_PIN ?= https://github.com/disteph/tracing/archive/refs/heads/main.zip
+TIMER_PACKAGE ?= timer.~dev
 TIMER_PIN ?= https://github.com/disteph/timer/archive/refs/heads/main.zip
 
 default: install-deps build
@@ -17,8 +19,8 @@ install-deps: opam-pins
 	$(OPAM) install . --deps-only $(OPAM_INSTALL_FLAGS)
 
 opam-pins:
-	$(OPAM) pin add tracing $(TRACING_PIN) $(OPAM_PIN_FLAGS)
-	$(OPAM) pin add timer $(TIMER_PIN) $(OPAM_PIN_FLAGS)
+	$(OPAM) pin add $(TRACING_PACKAGE) $(TRACING_PIN) $(OPAM_PIN_FLAGS)
+	$(OPAM) pin add $(TIMER_PACKAGE) $(TIMER_PIN) $(OPAM_PIN_FLAGS)
 
 debug:
 	dune build --profile debug
