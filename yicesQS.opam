@@ -23,5 +23,5 @@ pin-depends: [
   ["timer.dev" "https://github.com/disteph/timer/archive/refs/heads/main.zip"]
 ]
 build: [
-  make
+  make "build"
 ]

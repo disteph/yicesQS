@@ -54,7 +54,7 @@ Then, in the directory of this `README.md`, install (in findlib) the remaining O
 opam install . --deps-only
 ```
 
-Alternatively, from this directory you can run:
+Alternatively, from this directory you can run plain `make`; it will install the opam dependencies before building. To install dependencies without building, run:
 
 ```
 make install
