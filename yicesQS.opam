@@ -16,11 +16,14 @@ depends: [
   "tracing"
   "timer"
   "tyre"
+  "libpoly"
   "yices2_bindings"
 ]
 pin-depends: [
   ["tracing.dev" "https://github.com/disteph/tracing/archive/refs/heads/main.zip"]
   ["timer.dev" "https://github.com/disteph/timer/archive/refs/heads/main.zip"]
+  ["libpoly.0.2" "https://github.com/SRI-CSL/libpoly_ocaml_bindings/archive/refs/heads/main.zip"]
+  ["yices2_bindings.0.2" "https://github.com/SRI-CSL/yices2_ocaml_bindings/archive/49f9c9eabddfe27b5f965e6e0913da8c5450578c.zip"]
 ]
 build: [
   make "build"

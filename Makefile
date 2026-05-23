@@ -8,7 +8,7 @@ OPAM_INSTALL_FLAGS ?= --yes
 
 TRACING_PIN ?= https://github.com/disteph/tracing/archive/refs/heads/main.zip
 TIMER_PIN ?= https://github.com/disteph/timer/archive/refs/heads/main.zip
-LIBPOLY_BINDINGS_PIN ?= https://github.com/SRI-CSL/libpoly_ocaml_bindings/archive/refs/heads/main.zip
+LIBPOLY_PIN ?= https://github.com/SRI-CSL/libpoly_ocaml_bindings/archive/refs/heads/main.zip
 YICES2_BINDINGS_PIN ?= https://github.com/SRI-CSL/yices2_ocaml_bindings/archive/49f9c9eabddfe27b5f965e6e0913da8c5450578c.zip
 
 default: install-deps build
@@ -21,7 +21,7 @@ install-deps: opam-pins
 opam-pins:
 	$(OPAM) pin add tracing $(TRACING_PIN) $(OPAM_PIN_FLAGS)
 	$(OPAM) pin add timer $(TIMER_PIN) $(OPAM_PIN_FLAGS)
-	$(OPAM) pin add libpoly_bindings $(LIBPOLY_BINDINGS_PIN) $(OPAM_PIN_FLAGS)
+	$(OPAM) pin add libpoly $(LIBPOLY_PIN) $(OPAM_PIN_FLAGS)
 	$(OPAM) pin add yices2_bindings $(YICES2_BINDINGS_PIN) $(OPAM_PIN_FLAGS)
 
 debug:

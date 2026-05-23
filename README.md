@@ -43,7 +43,7 @@ First, run:
 ```
 opam pin tracing https://github.com/disteph/tracing/archive/refs/heads/main.zip
 opam pin timer https://github.com/disteph/timer/archive/refs/heads/main.zip
-opam pin libpoly_bindings https://github.com/SRI-CSL/libpoly_ocaml_bindings/archive/refs/heads/main.zip
+opam pin libpoly https://github.com/SRI-CSL/libpoly_ocaml_bindings/archive/refs/heads/main.zip
 opam pin yices2_bindings https://github.com/SRI-CSL/yices2_ocaml_bindings/archive/49f9c9eabddfe27b5f965e6e0913da8c5450578c.zip
 ```
 Note that this URL is the correct version of the Yices2 bindings that YicesQS requires. Opam may have a `yices2_bindings` package, but it's probably outdated.
