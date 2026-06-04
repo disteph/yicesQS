@@ -1,9 +1,40 @@
+(rule
+ (targets debug.mlh)
+ (mode (promote (until-clean)))
+ (action
+  (with-stdout-to %{targets}
+   (run sh -c
+     "if [ \"%{profile}\" = \"debug\" ]; then echo '[%%define debug_mode true]'; else echo '[%%define debug_mode false]'; fi"))))
+
 (executable
  (name main)
  (libraries sexplib containers zarith tracing timer yices2 eio_main)
- (flags (:standard -cclib -lyices))
  (promote (until-clean) (into ".."))
  (preprocess (pps ppx_optcomp ppx_deriving.std))
+ (preprocessor_deps (file debug.mlh))
 )
 
-(env (dev (flags (:standard -warn-error -A))))
+(env
+ (dev
+  (flags (:standard -warn-error -A))
+  (link_flags (:standard -cclib -lyices)))
+ (release
+  (link_flags (:standard -cclib -lyices)))
+ (static
+  (link_flags
+   (:standard
+    -ccopt -static
+    -ccopt -Wl,--allow-multiple-definition
+    -ccopt -Wl,--start-group
+    -cclib -lyices
+    -cclib -lcadical
+    -cclib -lcryptominisat5
+    -cclib -lkissat
+    -cclib -lcudd
+    -ccopt -Wl,--end-group
+    -cclib -lstdc++
+    -cclib -lz
+    -cclib -pthread
+    -cclib -lpoly
+    -cclib -lgmp
+    -cclib -lm))))

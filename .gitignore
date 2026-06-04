@@ -23,8 +23,18 @@ setup.log
 # Merlin configuring file for Vim and Emacs
 # .merlin
 
+# Editor metadata
+.vscode/
+
+# Local Codex/agent environments
+.codex/
+.agents/
+
 # Dune generated files
 *.install
+
+# Generated configure output
+config.mk
 
 # Local OPAM switch
 _opam/
@@ -32,3 +42,6 @@ _opam/
 # MacOS
 .zprofile.log
 .DS_Store
+
+# Generated debug flag
+src/debug.mlh

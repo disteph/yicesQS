@@ -3,6 +3,9 @@ open Yices2.High
 open Ext
 open Utils
 
+(* BV invertibility-condition machinery used by MBU (Def. 4) in the journal
+   OptiQSMA algorithm (Alg. 4, line 10), via QF_API.generalize_model. *)
+
 module OptionMonad = struct
   include Option
   let bind = ( >>= )
@@ -1273,6 +1276,11 @@ let solve_lit x lit substs =
  *   result *)
 
 
+(* solve_list conjuncts old_conditions x:
+   - conjuncts: current conjunction set
+   - old_conditions: accumulated epsilon constraints
+   - x: variable to eliminate
+   Returns updated conjuncts and conditions after one elimination attempt. *)
 let solve_list conjuncts old_conditions x : Term.t list * Term.t list =
   print "solve_list" 5 "@[<hv2>solve_list solves %a from@,%a@,@[<v>"
     Term.pp x
@@ -1316,6 +1324,7 @@ let solve_list conjuncts old_conditions x : Term.t list * Term.t list =
   print "solve_list" 5 "@]@]@,";
   result
 
+(* get_disjuncts t: flatten a disjunction into a list of disjuncts. *)
 let rec get_disjuncts t =
   let open Term in
   match reveal t with
@@ -1323,6 +1332,7 @@ let rec get_disjuncts t =
     l |> List.map get_disjuncts |> List.flatten
   | _ -> [t]
 
+(* get_conjuncts t: normalize a (possibly negated) formula into conjuncts. *)
 let get_conjuncts t = 
   let open Term in
   match reveal t with
@@ -1331,7 +1341,12 @@ let get_conjuncts t =
   | _ -> [t]
 
 
+(* solve_all vars t:
+   Iterate solve_list over vars and rebuild a generalized formula with any
+   epsilon constraints. This is the BV-specific MBU used in QF_API. *)
 let solve_all vars t =
+  (* Solve all candidate elimination constraints for vars, returning a
+     generalized formula used as U (Def. 4) in the BV fragment. *)
   let conjuncts = get_conjuncts t in
   print "solve_all" 3 "@[<2>IC analyses %a@]@," Term.pp t;
   let rec aux conjuncts conditions = function

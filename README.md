@@ -2,87 +2,207 @@
 
 # yicesQS
 
-YicesQS is an extension of Yices2 for quantified satisfiability. It currently supports the following logics of SMTLib:
+`yicesQS` is an extension of Yices 2 for quantified satisfiability. It accepts SMT-LIB inputs with quantifiers, builds quantifier-free obligations internally, and checks these obligations with Yices.
 
-- NRA (non-linear real arithmetic). Winner in
-[2021](https://smt-comp.github.io/2021/results/nra-single-query)
-[2022](https://smt-comp.github.io/2022/results/nra-single-query)
-[2023](https://smt-comp.github.io/2023/results/nra-single-query).
-- NIA (non-linear integer arithmetic)
-[2022](https://smt-comp.github.io/2022/results/nia-single-query)
-[2023](https://smt-comp.github.io/2023/results/nia-single-query)
-- LRA (linear real arithmetic). Winner in
-[2022](https://smt-comp.github.io/2022/results/lra-single-query)
-[2023](https://smt-comp.github.io/2023/results/lra-single-query).
-- LIA (linear integer arithmetic)
-[2022](https://smt-comp.github.io/2022/results/lia-single-query)
-[2023](https://smt-comp.github.io/2023/results/lia-single-query)
-- BV (bitvector)
-[2021](https://smt-comp.github.io/2021/results/bitvec-single-query)
-[2022](https://smt-comp.github.io/2022/results/bitvec-single-query)
-[2023](https://smt-comp.github.io/2023/results/bitvec-single-query)
+Supported SMT-LIB families include:
 
-A description of the solver can be found on the [2021](https://smt-comp.github.io/2021/system-descriptions/Yices2-QS.pdf) and [2022](https://smt-comp.github.io/2022/system-descriptions/YicesQS.pdf) SMT-comp websites.
+- NRA: non-linear real arithmetic
+- NIA: non-linear integer arithmetic
+- LRA: linear real arithmetic
+- LIA: linear integer arithmetic
+- BV: bit-vectors
 
+System descriptions are available from SMT-COMP:
 
+- [2021 Yices2-QS](https://smt-comp.github.io/2021/system-descriptions/Yices2-QS.pdf)
+- [2022 YicesQS](https://smt-comp.github.io/2022/system-descriptions/YicesQS.pdf)
 
+## Dependencies
 
-## Building and Running
+You need:
 
-#### Yices2 and dependencies
+- OCaml and Dune
+- opam, unless you install OCaml libraries manually
+- Yices 2 and its C dependencies
+- The Yices 2 OCaml bindings installed in the active opam switch
 
-Install [Yices version 2.6.4](https://yices.csl.sri.com/) and its dependencies [libpoly](https://github.com/SRI-CSL/libpoly) and [cudd](https://github.com/ivmai/cudd).
+The OCaml package dependencies are listed in `yicesQS.opam`. The Yices OCaml bindings are not installed automatically by this package, because current development often depends on local or vendored Yices builds.
 
-#### Installing OCaml dependencies with opam (needs 2.0 or higher)
+The usual local setup is:
 
-Besides Yices and its dependencies, YicesQS needs some OCaml dependencies and the Yices2 bindings. Assuming that the yices library (and the libraries it depends on) are present in the conventional directories (like `/usr/local/lib`), the OCaml libraries can all be installed by the following opam commands. 
-If for some reason this is not the case, follow the instructions for "Installing dependencies without opam".
-
-First, run:
-
-```
-opam pin tracing https://github.com/disteph/tracing/archive/refs/heads/main.zip
-opam pin libpoly_bindings https://github.com/SRI-CSL/libpoly_ocaml_bindings/archive/refs/heads/main.zip
-opam pin yices2 https://github.com/SRI-CSL/yices2_ocaml_bindings/archive/49f9c9eabddfe27b5f965e6e0913da8c5450578c.zip
-```
-Note that this URL is the correct version of the Yices2 bindings that YicesQS requires. Opam may have a `yices2_bindings` package, but it's probably outdated.
-
-Then, in the directory of this `README.md`, install (in findlib) the remaining OCaml dependencies with the following command:
-
-```
+```sh
+opam pin add tracing.v0.17.0 https://github.com/disteph/tracing/archive/refs/heads/main.zip
+opam pin add timer.~dev https://github.com/disteph/timer/archive/refs/heads/main.zip
 opam install . --deps-only
 ```
 
-#### Installing OCaml dependencies without opam (or with the Yices library being located in an unconventional directory)
+The Makefile can do the same dependency installation:
 
-You should start by installing the 
-[Yices2 bindings (in the dev branch)
-following these instructions](https://github.com/SRI-CSL/yices2_ocaml_bindings/tree/49f9c9eabddfe27b5f965e6e0913da8c5450578c).
-
-Then inspect `yicesQS.opam` to see if there are further OCaml dependencies listed there; if there are not installed (in findlib), install them with opam or from source.
-
-#### Building
-
-To build, run the following command:
-
+```sh
+make install
 ```
+
+or as part of the default target:
+
+```sh
 make
 ```
-in the directory of this `README.md`.
 
-This should create an executable `main.exe` in the directory; it is statically linked with the OCaml dependencies (you can execute it on a similar machine that doesn't have opam or findlib), but it is dynamically linked with Yices and its dependencies (libpoly, cudd, gmp, etc).
+If Yices or its dependencies are installed outside the usual linker/search paths, set the relevant environment variables before building or running. For test targets, `RUNTIME_LIBRARY_PATHS` controls the runtime library path prefix:
 
-You can also use `make clean`.
-
-If for some reason the yices library (or the libraries it depends on) are not in the conventional directories, then you can specify the correct directory paths by setting the environment variables `LDFLAGS` (for the yices library) and `LD_LIBRARY_PATH` (for its dependencies, like libpoly or cudd), e.g.:
-
-```
-export LD_LIBRARY_PATH=[UNCONVENTIONAL_PATHS]:/usr/local/lib
-export LDFLAGS="-L[UNCONVENTIONAL_PATH]"
+```sh
+make test RUNTIME_LIBRARY_PATHS="/path/to/lib:/usr/local/lib"
 ```
 
+## Configure
 
-#### Quick Testing
+Build mode is selected with `./configure`. `make` does not take build-mode options directly; it reads the generated `config.mk`.
 
-Simply execute `main.exe` on any of the files in the `regress` directory.
-For each file, you should get an answer `sat` or `unsat` on standard out.
+Default build:
+
+```sh
+./configure
+make build
+```
+
+Debug build:
+
+```sh
+./configure --debug
+make build
+```
+
+This uses Dune profile `debug`, which enables the `debug_mode` conditional code in `src/debug.mlh`.
+
+Static build:
+
+```sh
+./configure --static
+make build
+```
+
+This uses Dune profile `static` and checks that `main.exe` is not dynamically linked. Static builds are not supported on macOS because the system linker does not support fully static executables there.
+
+The generated `config.mk` is local build state and is ignored by git.
+
+## Build Targets
+
+Common targets:
+
+```sh
+make build
+make test
+make clean
+```
+
+The default target installs opam dependencies and builds:
+
+```sh
+make
+```
+
+Regression/benchmark targets:
+
+```sh
+make test
+make NRA
+make LRA
+make BV
+make oldBV
+```
+
+`make test` first runs the checked-in `regress/*.smt2` tests normally. It then reruns BV/QF_BV regressions with supported delegate SAT solvers, displaying the delegate used for each run.
+
+## Running
+
+After building, run:
+
+```sh
+./main.exe path/to/file.smt2
+```
+
+The solver prints `sat` or `unsat` on standard output.
+
+Useful options:
+
+```text
+-under N          Desired number of underapproximations in SAT answers
+-no_bv_invert    Disable BV invertibility conditions
+-mcsat           Force MCSAT
+-cdclT           Force CDCL(T)
+-cdclT-mcsat N   In BV: use CDCL(T) for up to N seconds, then switch to MCSAT
+-delegate S      For BV/CDCL(T): use delegate S
+-delegates       Print supported delegates
+```
+
+Trace/debug options are also available:
+
+```text
+-trace PATTERN
+-step
+-filedump PREFIX
+```
+
+Run the executable with `-help` for the full option list:
+
+```sh
+./main.exe -help
+```
+
+## Delegate SAT Solvers
+
+For BV, `yicesQS` transforms quantified problems into quantifier-free checks. These QF_BV checks can use Yices delegate SAT solvers.
+
+Only delegates that support the operations needed by `yicesQS` are exposed:
+
+- `cadical`
+- `cryptominisat`
+
+`y2sat` and `kissat` are not accepted by `yicesQS` because they do not support the assumption/unsat-core operations used by the solver.
+
+Show delegates supported by the linked Yices library and accepted by `yicesQS`:
+
+```sh
+./main.exe -delegates
+```
+
+Run with a delegate:
+
+```sh
+./main.exe -delegate cadical regress/035.smt2
+./main.exe -delegate cryptominisat regress/035.smt2
+```
+
+`-delegate none` is accepted as an explicit way to clear delegate selection; it follows the same solver path as omitting `-delegate`.
+
+## Static Linking
+
+Static builds are configured by:
+
+```sh
+./configure --static
+make build
+```
+
+On Linux, the build uses the Dune `static` profile. The current profile links Yices and the delegate/archive dependencies explicitly, including CaDiCaL, CryptoMiniSat, Kissat, CUDD, libpoly, GMP, zlib, pthread, and the C++ runtime.
+
+Check the result with:
+
+```sh
+ldd ./main.exe
+```
+
+For a fully static executable, `ldd` should report that it is not a dynamic executable.
+
+## Repository Notes
+
+Generated files and local environment folders are ignored, including:
+
+- `_build/`
+- `_opam/`
+- `config.mk`
+- `.vscode/`
+- `.codex/`
+- `.agents/`
+
+Untracked local benchmark collections can live alongside the checked-in regression suite, but `make test` uses the checked-in regression files so local scratch directories do not change the standard test set.

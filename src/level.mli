@@ -4,19 +4,17 @@ open Ext
 
 type t = {
     id : int;
-    ground  : Term.t;      (* Called Look-ahead Formula (LF) in the 2023 QSMA paper *)
-    rigid   : Term.t list; (* Eigenvariables that will systematically be set by ancestor games *)
-    newvars : Term.t list; (* Eigenvariables to be set by this game, disjoint from above *)
-    (* If uninterpreted constant u abstracts away formula (\forall x1...xn neg A), then *)
-    foralls : forall Seq.t; (* ... (\forall x1..x2 neg A) is turned into an adversarial
-                                    game/level g and (g + some meta-info) goes into that list;
-                                    these games are the children game of the current game *)
+    ground  : Term.t;      (* Look-ahead formula LF(n) (Def. 8). *)
+    rigid   : Term.t list; (* Rigid(n) variables (Def. 1/3), fixed by ancestors. *)
+    newvars : Term.t list; (* Local variables Var(n) \ Rigid(n) (Def. 1/3). *)
+    (* If a proxy variable abstracts a forall formula, we create a child sublevel. *)
+    foralls : forall Seq.t; (* Children nodes b with proxy b.p (Def. 1/2). *)
   }
 (* The notion of subgame/sublevel with meta-information *)
 and forall = {
-    name : Term.t;     (* A Boolean proxy variable that stands for (\forall x1..x2 neg A) *)
-    selector : Term.t; (* making that selector true enforces the constraints at that level *)
-    selector_context : Context.t; (* not the main Yices context for QSMA *)
+    name : Term.t;     (* Boolean proxy b.p for the quantified subformula (Def. 1/2). *)
+    selector : Term.t; (* Internal selector used to assert LF(b) (Def. 8). *)
+    selector_context : Context.t; (* Separate context used for selector-based SMA. *)
     sublevel : t
   }
 

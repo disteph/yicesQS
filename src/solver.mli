@@ -15,12 +15,11 @@ end
    base_support is the support of model,
    and game may involve uninterpreted constants outside base_support
    - If the call outputs Unsat f, it means:
-   here is a formula f whose uninterpreted constants are in base_support,
-   that is satisfied by model, and that is inconsistent with game.
-   - If the call outputs Sat l, it means:
-   each formula f in the list of formulae f has its uninterpreted constants in base_support,
-   is satisfied by model, and implies game.
-*)
+     here is a formula f whose uninterpreted constants are in base_support,
+     that is satisfied by model, and that is inconsistent with game.
+   - If the call outputs Sat r, it means:
+     each formula f in r.reasons has its uninterpreted constants in base_support,
+     is satisfied by r.model, and implies game. *)
 
 type answer =
   | Unsat of Term.t

@@ -15,8 +15,12 @@ depends: [
   "containers"  {>= "3.0.0"}
   "tracing"
   "timer"
-  "yices2_bindings"
+  "tyre"
+]
+pin-depends: [
+  ["tracing.v0.17.0" "https://github.com/disteph/tracing/archive/refs/heads/main.zip"]
+  ["timer.~dev" "https://github.com/disteph/timer/archive/refs/heads/main.zip"]
 ]
 build: [
-  make
+  make "build"
 ]

@@ -60,21 +60,42 @@ let copyNtrace filename subdir state prefix =
   print_trace filename subdir state prefix
 
 open Arg
+module YicesHigh = Yices2.High.Make(Yices2.High.NoErrorHandling)
 
 let args = ref []
 let description = "QE in Yices"
+let print_delegates = ref false
 
 let init_solver : mode option ref = ref None
+
+let force_fail () =
+  if Option.is_some !init_solver then failwith "Trying to force solver more than once."
+
 let set_mcsat () =
+  force_fail();
   if Option.is_none !init_solver then init_solver := Some `MCSAT;
   ysolver := Some `MCSAT
-let set_cdclT ass =
+
+let set_cdclT = function
+  | "Eq" | "eq" | "EQ" ->
+      force_fail();
+      let solver = Some (`CDCLT `Eq) in
+      init_solver := solver;
+      ysolver := solver
+  | "Ineq" | "ineq" | "INEQ" | "Neq" | "neq" | "NEQ" ->
+      force_fail();
+      let solver = Some (`CDCLT `Ineq) in
+      init_solver := solver;
+      ysolver := solver
+  | s ->
+      failwith ("Unknown CDCL(T) assignment mode " ^ s ^ " (expected Eq or Ineq)")
+
+let set_cdclT_default () =
+  force_fail();
   let solver =
-    match ass with
-    | "Eq" | "eq" | "EQ" -> Some(`CDCLT `Eq) 
-    | _    -> Some(`CDCLT `Ineq)
+    Some (`CDCLT `Ineq)
   in
-  if Option.is_none !init_solver then init_solver := solver;
+  init_solver := solver;
   ysolver := solver
 
 let init_seed = ref None
@@ -86,22 +107,45 @@ let switch i = events := (float_of_int i,!ysolver,!yseed)::!events
 let switch_seeds n =
   create_pool !ysolver !switch_after n
 
-
+let set_delegate = function
+  | "none" ->
+     delegate := None
+  | "cadical" | "cryptominisat" as name ->
+     if YicesHigh.has_delegate name then
+       delegate := Some name
+     else
+      failwith ("Delegate " ^ name ^ " is not available in the linked Yices library")
+  | name ->
+     failwith ("Unknown delegate " ^ name ^ " (expected none, cadical, or cryptominisat)")
+  
 let options = [
   ("-under",          Int(fun u -> underapprox := u), "\t\tDesired number of underapproximations in SAT answers (default is 1)");
   ("-no_bv_invert",   Clear bv_invert, "\tDisables invertibility conditions for BV (default is false, i.e. invertibility conditions are computed)");
   ("-auto_portfolio", Int(fun t -> timeout := Some(float_of_int t)) , "S\tTriggers sequential auto-portfolio anticipating timeout of S seconds");
   ("-mcsat",    Unit set_mcsat, "\t\tSets solver as MCSAT");
-  ("-cdclT",    String set_cdclT, "S\t\tSets solver as CDCL(T) modeling input assignments on arithmetic or bitvector types as equality assumptions (S = \"Eq\") or inequality assumptions (otherwise)");
+  ("-cdclT",    Unit set_cdclT_default, "\t\tSets solver as CDCL(T) with inequality assumptions");
+  ("-cdclT-assumptions", String set_cdclT, "S\tSets CDCL(T) assignment mode (Eq or Ineq)");
   ("-seed",     Int set_seed, "S\t\tSets random seed to S");
   ("-switch",   Int switch, "T \t\tAfter T seconds, switch to new run using lastly set solver and seed");
   ("-switch_seeds", Tuple [Int (fun i -> switch_after := float_of_int i); Int switch_seeds], "T N\tEvery T seconds, for N times, increment the seed and switch to new run using lastly set solver and incremented seed");
+  ("-delegate", String set_delegate, "S\tFor BV/CDCL(T): use SAT delegate S (none, cadical, or cryptominisat)");
+  ("-delegates", Set print_delegates, "\tPrint supported SAT delegates and exit");
 ]@Tracing.options;;
 
 Arg.parse options (fun a->args := a::!args) description;;
 ysolver := !init_solver;;
 yseed := Option.get_or ~default:0 !init_seed;;
 Tracing.compile();;
+
+if !print_delegates then begin
+  "none" ::
+  ([ "cadical"; "cryptominisat" ]
+  |> List.filter YicesHigh.has_delegate
+  )
+  |> String.concat " "
+  |> print_endline;
+  exit 0
+end;;
 
 match !args with
 | [filename] ->
@@ -165,5 +209,3 @@ match !args with
   )
 | [] -> failwith "Too few arguments in the command"
 | _ -> failwith "Too many arguments in the command";;
-
-

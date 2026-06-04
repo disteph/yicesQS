@@ -3,7 +3,7 @@ open Ext
 
 open Utils
 
-type t = { (* See comments in mli *)
+type t = { (* See comments in mli for Def. 1/2/8 references. *)
     id : int;
     ground  : Term.t;
     rigid   : Term.t list;
@@ -45,6 +45,5 @@ and pp_foralls fmt foralls =
 
 let rec free level =
   Seq.iter free_forall level.foralls
-and free_forall {selector_context; sublevel; _} =
-  Context.free selector_context;
+and free_forall {sublevel; _} =
   free sublevel

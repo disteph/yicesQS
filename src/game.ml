@@ -5,10 +5,13 @@ open Ext
 
 open Utils
 
+(* Build the QSMA-tree (Def. 1) and look-ahead formulas LF(n) (Def. 8)
+   used by OptiQSMA (Alg. 3/4). *)
+
 module type T = sig
-  val ground    : Term.t (* Ground abstraction of the game, as a quantifier-free formula *)
-  val existentials : Term.t Seq.t
-  val universals   : Term.t Seq.t
+  val ground    : Term.t (* root.F with proxies (Def. 2), part of LF(root) (Def. 8). *)
+  val existentials : Term.t Seq.t (* Conjuncts encoding p => LF(child) (Def. 8). *)
+  val universals   : Term.t Seq.t (* Selector constraints enforcing LF(child) (Def. 8). *)
   val top_level : Level.t
 end
 
@@ -25,8 +28,7 @@ let pp fmt (module T:T) =
     (List.pp ~pp_sep:pp_space Term.pp) (Seq.to_list existentials)
     Level.pp top_level
 
-(* The encoding of a formula into a game is done with a state monad,
-     where the state is this *)
+(* The encoding of a formula into a QSMA-tree uses a state monad. *)
 
 type state = {
     newvars : Term.t list;
@@ -48,7 +50,8 @@ end
 module MList = Yices2.Common.MList(StateMonad)
 include MTerm(StateMonad)
 
-(* Create fresh names for turning bound variables into eigenvariables *)
+(* Create fresh names for turning bound variables into eigenvariables
+   (they become rigid variables for descendant nodes, Def. 1/3). *)
 let bound_counter = ref 1
 
 let fresh_bound () : string =
@@ -81,10 +84,10 @@ let counter = ref 0
    To detect this, we need a map from forall terms to games *)
 let foralls_rev = Types.HTerms.create 10
 
-(* Core procedure for encoding a formula (\exists intros.body) into a game.
+(* Core procedure for encoding a formula (exists intro. body) into a game.
    - config is the Yices config
    - intros and body are describing the existential formula we're encoding
-   - rigid are the variables that will be set be the ancestor games
+   - rigid are the variables that will be set by the ancestor games (Rigid(n))
    - rigidintro = rigid + intro; for some reason this is useful
    and we want to avoid the cost of concatenation everytime we need it.
  *)
@@ -92,7 +95,7 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
   let open StateMonad in
 
   (* This auxiliary function descends into the term structure of body
-     in order to find subformulas of the form forall *)
+     and turns forall subformulas into proxy variables (Def. 1/2). *)
   let rec aux t : Term.t StateMonad.t =
     let Term a = Term.reveal t in
     match a with
@@ -109,18 +112,18 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
          return(Types.HTerms.find foralls_rev t) (* returns game previously generated *)
        else
          begin
-           (* Creating a selector for the forall formula *)
+           (* Creating a selector for the forall formula (used to enforce LF). *)
            incr counter;
            let freshcount = string_of_int !counter in
            let name  = "trig"^freshcount in
            let selector = Term.new_uninterpreted ~name (Type.bool()) in
-           (* Creating a name for the forall formula *)
+           (* Creating a proxy name b.p for the forall formula (Def. 1/2). *)
            let name  = "name"^freshcount in
            let name  = Term.new_uninterpreted ~name (Type.bool()) in
            (* Types.HTerms.add foralls_rev t name; *)
-           (* We replace bound variables by eigenvariables *)
+           (* We replace bound variables by eigenvariables (Rigid for descendants). *)
            let substituted, rigidintro_sub, intro_sub = fresh ~accu:rigidintro vars body in
-           (* we recursively create a subgame *)
+           (* Recursively create the QSMA-subtree for the negated body. *)
            let (module SubGame) =
              process config
                ~rigidintro:rigidintro_sub
@@ -133,13 +136,12 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
            let newforall =
              Level.{ name; selector; selector_context; sublevel = SubGame.top_level }
            in
-           (* name stands for (\forall vars.body),
+           (* name stands for the forall formula; SubGame.ground is LF(b).
               and SubGame.ground should hold if the existential formula is true;
               hence, the implication (not name) => SubGame.ground should always hold.
-              See the notion of Look-ahead Formula LF in the QSMA paper, definition 6.
-            *)
+              This is the LF(n) shape of Def. 8 (via p => LF(b)). *)
            let existential = Term.(name ||| SubGame.ground) in
-           (* The selector is just a way to assert the Look-ahead Formula of the subgame
+           (* The selector is just a way to assert LF(b) in a separate context.
               Technically we just need (selector ==> SubGame.ground),
               but experiments show slightly better results with ===; who knows why... *)
            let universal   = Term.(selector === SubGame.ground) in
