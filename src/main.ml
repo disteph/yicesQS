@@ -60,12 +60,25 @@ let copyNtrace filename subdir state prefix =
   print_trace filename subdir state prefix
 
 open Arg
+module YicesHigh = Yices2.High.Make(Yices2.High.NoErrorHandling)
 
 let args = ref []
 let description = "QE in Yices"
+let print_delegates = ref false
 
 let force_fail() =
   if Option.is_some !ysolver then failwith "Trying to force solver more than once."
+
+let set_delegate = function
+  | "none" ->
+     delegate := None
+  | "cadical" | "cryptominisat" as name ->
+     if YicesHigh.has_delegate name then
+       delegate := Some name
+     else
+       failwith ("Delegate " ^ name ^ " is not available in the linked Yices library")
+  | name ->
+     failwith ("Unknown delegate " ^ name ^ " (expected none, cadical, or cryptominisat)")
   
 let options = [
   ("-under",    Int(fun u -> underapprox := u), "\t\tDesired number of underapproximations in SAT answers (default is 1)");
@@ -73,10 +86,22 @@ let options = [
   ("-mcsat",    Unit(fun () -> force_fail(); ysolver := Some `MCSAT), "\t\tForces usage of MCSAT");
   ("-cdclT",    Unit(fun () -> force_fail(); ysolver := Some `CDCLT), "\t\tForces usage of CDCL(T)");
   ("-cdclT-mcsat", Int(fun s -> force_fail(); cdclT_mcsat := float_of_int s), "X \tIn BV: tries CDCL(T) for up to X seconds, then switches to MCSAT; no effect if logic is not BV");
+  ("-delegate", String set_delegate, "S\tFor BV/CDCL(T): use SAT delegate S (none, cadical, or cryptominisat)");
+  ("-delegates", Set print_delegates, "\tPrint supported SAT delegates and exit");
 ]@Tracing.options;;
 
 Arg.parse options (fun a->args := a::!args) description;;
 Tracing.compile();;
+
+if !print_delegates then begin
+  "none" ::
+  ([ "cadical"; "cryptominisat" ]
+  |> List.filter YicesHigh.has_delegate
+  )
+  |> String.concat " "
+  |> print_endline;
+  exit 0
+end;;
 
 match !args with
 | [filename] ->
@@ -140,5 +165,3 @@ match !args with
   )
 | [] -> failwith "Too few arguments in the command"
 | _ -> failwith "Too many arguments in the command";;
-
-

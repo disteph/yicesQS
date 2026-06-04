@@ -1,4 +1,4 @@
-.PHONY: default build static install install-deps opam-pins debug uninstall test static-test run-test NRA LRA BV oldBV clean
+.PHONY: default build static install install-deps opam-pins debug uninstall test static-test run-test run-bv-delegate-test run-all-tests NRA LRA BV oldBV clean
 
 export OCAMLRUNPARAM = b
 
@@ -9,9 +9,12 @@ OPAM_INSTALL_FLAGS ?= --yes
 OPAM_LIBDIR ?= $(shell $(OPAM) var lib 2>/dev/null)
 OPAM_STUBLIBS ?= $(shell $(OPAM) var stublibs 2>/dev/null)
 RUNTIME_LIBRARY_PATHS ?= $(OPAM_LIBDIR):$(OPAM_STUBLIBS):/usr/local/lib
+BV_DELEGATES ?= cadical cryptominisat
+REGRESS_SMT2 ?= $(shell git ls-files 'regress/**/*.smt2' 'regress/*.smt2')
 RUN_WITH_LIBPATH = LD_LIBRARY_PATH="$(RUNTIME_LIBRARY_PATHS)$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}" DYLD_LIBRARY_PATH="$(RUNTIME_LIBRARY_PATHS)$${DYLD_LIBRARY_PATH:+:$$DYLD_LIBRARY_PATH}"
 RUN_MAIN_EXE = sh -c 'status=0; for file do echo "$$file"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$file" || status=1; done; exit $$status' sh
 RUN_MAIN_OLD_EXE = sh -c 'status=0; for file do echo "$$file"; $(RUN_WITH_LIBPATH) timeout 5 ./main-old.exe "$$file" || status=1; done; exit $$status' sh
+RUN_BV_DELEGATES = sh -c 'status=0; supported="$$( $(RUN_WITH_LIBPATH) ./main.exe -delegates 2>/dev/null || true )"; enabled=""; for delegate in $(BV_DELEGATES); do case " $$supported " in *" $$delegate "*) enabled="$${enabled:+$$enabled }$$delegate" ;; *) echo "Skipping unsupported delegate: $$delegate" ;; esac; done; echo "Supported QF_BV delegates: $${enabled:-<none>}"; for delegate in $$enabled; do echo "QF_BV delegate: $$delegate"; for file do if grep -Eq "\(set-logic (QF_)?BV\)" "$$file"; then echo "$$file [delegate=$$delegate]"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe -delegate "$$delegate" "$$file" || status=1; fi; done; done; exit $$status' sh
 
 TRACING_PACKAGE ?= tracing.v0.17.0
 TRACING_PIN ?= https://github.com/disteph/tracing/archive/refs/heads/main.zip
@@ -50,12 +53,21 @@ static:
 clean:
 	dune clean
 
-test: build run-test
+test: build run-all-tests
 
 static-test: static run-test
 
-run-test:
-	time find regress -follow -name "*.smt2" -exec $(RUN_MAIN_EXE) {} +
+run-all-tests:
+	time { \
+		$(RUN_MAIN_EXE) $(REGRESS_SMT2) && \
+		$(RUN_BV_DELEGATES) $(REGRESS_SMT2); \
+	}
+
+run-test: build
+	time $(RUN_MAIN_EXE) $(REGRESS_SMT2)
+
+run-bv-delegate-test: build
+	time $(RUN_BV_DELEGATES) $(REGRESS_SMT2)
 
 NRA:
 	time find ../SMTLib/NRA -follow -name "*.smt2" -exec $(RUN_MAIN_EXE) {} +

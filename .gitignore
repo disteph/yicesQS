@@ -23,6 +23,13 @@ setup.log
 # Merlin configuring file for Vim and Emacs
 # .merlin
 
+# Editor metadata
+.vscode/
+
+# Local Codex/agent environments
+.codex/
+.agents/
+
 # Dune generated files
 *.install
 

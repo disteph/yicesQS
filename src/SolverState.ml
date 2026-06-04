@@ -28,6 +28,11 @@ end
 
 type t = (module T)
 
+let qf_logic_of_logic logic =
+  if String.length logic > 3 && String.equal (String.sub logic 0 3) "QF_"
+  then logic
+  else "QF_" ^ logic
+
 let pp fmt (module T:T) =
   Format.fprintf fmt "@[<v>\
                       @[%a@]\
@@ -48,11 +53,7 @@ let pp_log_raw fmt ((module T:T),log) =
   Format.fprintf fmt "@[<v>%a@]" (List.pp ~pp_sep:pp_space pp_sexp) (option::sl::log)
 
 let create ~logic config (module G : Game.T) =
-  let qf_logic =
-    if String.length logic > 3 && String.equal (String.sub logic 0 3) "QF_"
-    then logic
-    else "QF_"^logic
-  in
+  let qf_logic = qf_logic_of_logic logic in
   let logic = match logic with
     | "NRA" | "QF_NRA" -> `NRA
     | "NIA" | "QF_NIA" -> `NIA

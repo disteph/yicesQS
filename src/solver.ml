@@ -102,6 +102,13 @@ let check_interval = 1.0
 
 let () = Global.init()
 
+let uses_cdclt logic =
+  match SolverState.qf_logic_of_logic logic with
+  | "QF_BV" | "QF_LIA" -> true
+  | _ -> false
+
+let is_qf_bv_logic = String.equal "QF_BV"
+
 (* solve ?compute_over state level smodel support:
    - compute_over: if true, compute a model interpolant on UNSAT
    - state: solver state (contexts, logic, counters)
@@ -167,6 +174,10 @@ let rec solve ?(compute_over=true) state level smodel support : answer*SolverSta
         (SModel.with_support (List.append level.newvars (Support.list support)) smodel);
 
       post_process ~compute_over state level smodel support
+
+    | `STATUS_ERROR ->
+      let report = Error.report () in
+      raise (FromYicesException(state, level, report, Printexc.get_backtrace()))
 
     | x -> Types.show_smt_status x |> print_endline; failwith "not good status"
 
@@ -424,16 +435,25 @@ let setmode config = Config.set config ~name:"mode" ~value:"push-pop"
 let setmode config = Config.set config ~name:"mode" ~value:"multi-checks"
 [%%endif]
 
-(* set_config mcsat:
+(* set_config ~logic mcsat:
    - mcsat: whether to use MCSAT or CDCL(T)
-   Creates a Yices config with the right solver and interpolation settings. *)
-let set_config mcsat =
+   Creates a Yices config with the right solver and interpolation settings.
+   Delegate selection is configured on reusable QF_BV contexts. *)
+let set_config ~logic mcsat =
   let cfg = Config.malloc () in
   if mcsat
   then
     begin 
       Config.set cfg ~name:"solver-type" ~value:"mcsat";
       Config.set cfg ~name:"model-interpolation" ~value:"true"
+    end
+  else
+    begin
+      match !Command_options.delegate with
+      | Some delegate when is_qf_bv_logic (SolverState.qf_logic_of_logic logic) ->
+         Config.default ~logic:"QF_BV" cfg;
+         Config.set cfg ~name:"sat-delegate" ~value:delegate
+      | _ -> ()
     end;
   setmode cfg;
   cfg
@@ -491,9 +511,9 @@ let treat filename =
              match !Command_options.ysolver with
              | Some `MCSAT -> true
              | Some `CDCLT -> false
-             | None -> not(String.equal "BV" l || String.equal "LIA" l)
+             | None -> not(uses_cdclt l)
            in
-           config := Some(set_config mcsat)
+           config := Some(set_config ~logic:l mcsat)
 
         | "check-sat", [] ->
            begin
@@ -518,7 +538,7 @@ let treat filename =
                   with
                     TimeToSwitch ->
                     print "counter" 1 "@[<v>SWITCH TO MCSAT@]@,";
-                    let state = SolverState.create ~logic:!logic (set_config true) game in
+                    let state = SolverState.create ~logic:!logic (set_config ~logic:!logic true) game in
                     solve ~compute_over:false state G.top_level (SModel.empty()) Support.Empty
                 in
                 print "treat" 1 "@]@,";

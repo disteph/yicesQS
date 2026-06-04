@@ -17,6 +17,7 @@ module type T = sig
 
 type t = (module T)
 
+val qf_logic_of_logic : string -> string
 val pp : t Format.printer
 val pp_log_raw : (t * Sexplib.Sexp.t list) Format.printer
 (* val pp_log     : t Format.printer *)
