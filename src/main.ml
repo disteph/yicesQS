@@ -79,10 +79,16 @@ let set_delegate = function
        failwith ("Delegate " ^ name ^ " is not available in the linked Yices library")
   | name ->
      failwith ("Unknown delegate " ^ name ^ " (expected none, cadical, or cryptominisat)")
+
+let set_wide_projection budget =
+  if budget < 0 then
+    failwith "-wide-projection expects a non-negative integer budget";
+  wide_projection := Some budget
   
 let options = [
   ("-under",    Int(fun u -> underapprox := u), "\t\tDesired number of underapproximations in SAT answers (default is 1)");
   ("-no_bv_invert", Clear bv_invert, "\tDisables invertibility conditions for BV (default is false, i.e. invertibility conditions are computed)");
+  ("-wide-projection", Int set_wide_projection, "N\tUse wide model projection with cube budget N (0 means unbounded)");
   ("-mcsat",    Unit(fun () -> force_fail(); ysolver := Some `MCSAT), "\t\tForces usage of MCSAT");
   ("-cdclT",    Unit(fun () -> force_fail(); ysolver := Some `CDCLT), "\t\tForces usage of CDCL(T)");
   ("-cdclT-mcsat", Int(fun s -> force_fail(); cdclT_mcsat := float_of_int s), "X \tIn BV: tries CDCL(T) for up to X seconds, then switches to MCSAT; no effect if logic is not BV");

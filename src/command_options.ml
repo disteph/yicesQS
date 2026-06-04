@@ -6,3 +6,4 @@ let bv_invert = ref true
 let ysolver : [`CDCLT | `MCSAT ] option ref = ref None
 let cdclT_mcsat = ref 0.0
 let delegate : string option ref = ref None
+let wide_projection : int option ref = ref None

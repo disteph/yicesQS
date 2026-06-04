@@ -150,7 +150,12 @@ let generalize_model ~logic smodel ~true_of_model ~rigid_vars ~newvars
        try
          (* For LRA/NRA, try Yices projection after eliminating risky divisions. *)
          let true_of_model = denum_elim smodel true_of_model in
-         SModel.generalize_model smodel true_of_model newvars `YICES_GEN_BY_PROJ
+         (match !Command_options.wide_projection with
+          | Some cube_budget ->
+              SModel.generalize_model_with_budget smodel true_of_model newvars
+                `YICES_GEN_BY_PROJ_WIDE cube_budget
+          | None ->
+              SModel.generalize_model smodel true_of_model newvars `YICES_GEN_BY_PROJ)
          |> Term.andN |> fun x -> CLL.return(WithEpsilons.return x)
        with _ ->
          (* Fall back to substitution-based generalization on failure. *)
