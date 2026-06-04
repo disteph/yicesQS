@@ -56,10 +56,10 @@ clean:
 test: build run-all-tests
 
 run-all-tests:
-	time { \
+	time ( \
 		$(RUN_MAIN_EXE) $(REGRESS_SMT2) && \
-		$(RUN_BV_DELEGATES) $(REGRESS_SMT2); \
-	}
+		$(RUN_BV_DELEGATES) $(REGRESS_SMT2) \
+	)
 
 run-test: build
 	time $(RUN_MAIN_EXE) $(REGRESS_SMT2)
