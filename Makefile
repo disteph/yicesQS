@@ -1,6 +1,12 @@
-.PHONY: default build static install install-deps opam-pins debug uninstall test static-test run-test run-bv-delegate-test run-all-tests NRA LRA BV oldBV clean
+.PHONY: default build install install-deps opam-pins uninstall test run-test run-bv-delegate-test run-all-tests NRA LRA BV oldBV clean
 
 export OCAMLRUNPARAM = b
+
+-include config.mk
+
+DUNE_PROFILE ?=
+YICESQS_STATIC ?= 0
+DUNE_PROFILE_FLAG = $(if $(DUNE_PROFILE),--profile $(DUNE_PROFILE),)
 
 OPAM ?= opam
 OPAM_PIN_FLAGS ?= --yes --no-action
@@ -32,21 +38,15 @@ opam-pins:
 	$(OPAM) pin add $(TRACING_PACKAGE) $(TRACING_PIN) $(OPAM_PIN_FLAGS)
 	$(OPAM) pin add $(TIMER_PACKAGE) $(TIMER_PIN) $(OPAM_PIN_FLAGS)
 
-debug:
-	dune build --profile debug
-
 build:
-	dune build
-
-static:
-	@if [ "$$(uname -s)" = "Darwin" ]; then \
-		echo "make static is not supported on macOS (ld does not support fully static executables)"; \
+	@if [ "$(YICESQS_STATIC)" = "1" ] && [ "$$(uname -s)" = "Darwin" ]; then \
+		echo "static builds are not supported on macOS (ld does not support fully static executables)"; \
 		exit 1; \
 	fi
-	dune build --profile static
-	@if command -v ldd >/dev/null 2>&1 && ldd main.exe 2>/dev/null | grep -q '=>'; then \
+	dune build $(DUNE_PROFILE_FLAG)
+	@if [ "$(YICESQS_STATIC)" = "1" ] && command -v ldd >/dev/null 2>&1 && ldd main.exe 2>/dev/null | grep -q '=>'; then \
 		ldd main.exe; \
-		echo "make static did not produce a fully static executable"; \
+		echo "configured static build did not produce a fully static executable"; \
 		exit 1; \
 	fi
 
@@ -54,8 +54,6 @@ clean:
 	dune clean
 
 test: build run-all-tests
-
-static-test: static run-test
 
 run-all-tests:
 	time { \
