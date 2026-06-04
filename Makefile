@@ -56,10 +56,7 @@ clean:
 test: build run-all-tests
 
 run-all-tests:
-	time ( \
-		$(RUN_MAIN_EXE) $(REGRESS_SMT2) && \
-		$(RUN_BV_DELEGATES) $(REGRESS_SMT2) \
-	)
+	time sh -c 'status=0; for file do echo "$$file"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$file" || status=1; done; if [ $$status -ne 0 ]; then exit $$status; fi; supported="$$( $(RUN_WITH_LIBPATH) ./main.exe -delegates 2>/dev/null || true )"; enabled=""; for delegate in $(BV_DELEGATES); do case " $$supported " in *" $$delegate "*) enabled="$${enabled:+$$enabled }$$delegate" ;; *) echo "Skipping unsupported delegate: $$delegate" ;; esac; done; echo "Supported QF_BV delegates: $${enabled:-<none>}"; for delegate in $$enabled; do echo "QF_BV delegate: $$delegate"; for file do if grep -Eq "\(set-logic (QF_)?BV\)" "$$file"; then echo "$$file [delegate=$$delegate]"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe -delegate "$$delegate" "$$file" || status=1; fi; done; done; exit $$status' sh $(REGRESS_SMT2)
 
 run-test: build
 	time $(RUN_MAIN_EXE) $(REGRESS_SMT2)
