@@ -1,4 +1,4 @@
-.PHONY: default build install install-deps opam-pins uninstall test run-test run-bv-delegate-test run-wide-projection-test run-all-tests NRA LRA BV oldBV clean
+.PHONY: default build install install-deps opam-pins uninstall test run-test run-bv-delegate-test run-wide-projection-test run-all-tests nra-wide-stats NRA LRA BV oldBV clean
 
 export OCAMLRUNPARAM = b
 
@@ -17,6 +17,10 @@ OPAM_STUBLIBS ?= $(shell $(OPAM) var stublibs 2>/dev/null)
 RUNTIME_LIBRARY_PATHS ?= $(OPAM_LIBDIR):$(OPAM_STUBLIBS):/usr/local/lib
 BV_DELEGATES ?= cadical cryptominisat
 REGRESS_SMT2 ?= $(shell git ls-files 'regress/**/*.smt2' 'regress/*.smt2')
+NRA_WIDE_STATS_BUDGETS ?= 1 10 0
+NRA_WIDE_STATS_TIMEOUT ?= 5
+NRA_WIDE_STATS_MAX_FILES ?= 0
+NRA_WIDE_STATS_OUT_DIR ?=
 RUN_WITH_LIBPATH = LD_LIBRARY_PATH="$(RUNTIME_LIBRARY_PATHS)$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}" DYLD_LIBRARY_PATH="$(RUNTIME_LIBRARY_PATHS)$${DYLD_LIBRARY_PATH:+:$$DYLD_LIBRARY_PATH}"
 RUN_MAIN_EXE = sh -c 'status=0; for file do echo "$$file"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$file" || status=1; done; exit $$status' sh
 RUN_MAIN_OLD_EXE = sh -c 'status=0; for file do echo "$$file"; $(RUN_WITH_LIBPATH) timeout 5 ./main-old.exe "$$file" || status=1; done; exit $$status' sh
@@ -67,6 +71,9 @@ run-bv-delegate-test: build
 
 run-wide-projection-test: build
 	time $(RUN_WIDE_PROJECTION) $(REGRESS_SMT2)
+
+nra-wide-stats: build
+	time scripts/run_nra_wide_stats.sh --no-build --budgets "$(NRA_WIDE_STATS_BUDGETS)" --timeout "$(NRA_WIDE_STATS_TIMEOUT)" --max-files "$(NRA_WIDE_STATS_MAX_FILES)" $(if $(NRA_WIDE_STATS_OUT_DIR),--out-dir "$(NRA_WIDE_STATS_OUT_DIR)",)
 
 NRA:
 	time find ../SMTLib/NRA -follow -name "*.smt2" -exec $(RUN_MAIN_EXE) {} +

@@ -45,3 +45,6 @@ _opam/
 
 # Generated debug flag
 src/debug.mlh
+
+# Local benchmark experiment output
+experiments/
