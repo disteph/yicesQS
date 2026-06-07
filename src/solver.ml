@@ -440,7 +440,9 @@ let create_events logic =
     match SolverState.qf_logic_of_logic logic with
     | "QF_NRA" | "QF_NIA" ->
       if auto_portfolio then begin
-        events := (24.5 /. 1200. *. timeout, Some `MCSAT, 0) :: !events;
+        wide_projection := Some 0;
+        events := (24.5 /. 1200. *. timeout,
+                   make_slice_config ~mode:(Some `MCSAT) ~seed:0 ()) :: !events;
         create_pool (Some `MCSAT) small_switch 20
       end;
       `MCSAT
@@ -454,9 +456,11 @@ let create_events logic =
       `CDCLT `Ineq
     | "QF_BV" ->
       if auto_portfolio then begin
-        events := (24.5 /. 1200. *. timeout, Some (`CDCLT `Eq), 0) :: !events;
+        events := (24.5 /. 1200. *. timeout,
+                   make_slice_config ~mode:(Some (`CDCLT `Eq)) ~seed:0 ()) :: !events;
         create_pool (Some (`CDCLT `Eq)) small_switch 10;
-        events := (700. /. 1200. *. timeout, Some `MCSAT, 0) :: !events;
+        events := (700. /. 1200. *. timeout,
+                   make_slice_config ~mode:(Some `MCSAT) ~seed:0 ()) :: !events;
         create_pool (Some `MCSAT) small_switch 10
       end;
       `CDCLT `Eq
@@ -586,7 +590,7 @@ let treat filename =
                     in
                     match !events with
                     | [] -> f ()
-                    | (timeout_sec, newmode, random_seed) :: rest ->
+                    | (timeout_sec, config) :: rest ->
                       let stop () =
                         SolverState.stop state;
                         Atomic.set cancel_flag true
@@ -594,11 +598,13 @@ let treat filename =
                       match run_with_timeout ~timeout_sec ~stop f with
                       | Some answer -> answer
                       | None ->
-                        let newmode = Option.get_or ~default:!mode newmode in
+                        apply_slice_config config;
+                        let newmode = Option.get_or ~default:!mode config.mode in
+                        mode := newmode;
                         print "counter" 1 "@[<v>SWITCH TO %s with random seed %i@]@,"
                           (match newmode with `MCSAT -> "MCSAT" | `CDCLT _ -> "CDCLT")
-                          random_seed;
-                        current_param := Some (param_from_seed random_seed !logic newmode);
+                          config.seed;
+                        current_param := Some (param_from_seed config.seed !logic newmode);
                         as_inequalities := (match newmode with `CDCLT `Ineq -> true | _ -> false);
                         events := rest;
                         Atomic.set cancel_flag false;

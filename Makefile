@@ -1,4 +1,4 @@
-.PHONY: default build install install-deps opam-pins uninstall test run-test run-bv-delegate-test run-all-tests NRA LRA BV oldBV clean
+.PHONY: default build install install-deps opam-pins uninstall test run-test run-bv-delegate-test run-wide-projection-test run-all-tests NRA LRA BV oldBV clean
 
 export OCAMLRUNPARAM = b
 
@@ -21,6 +21,7 @@ RUN_WITH_LIBPATH = LD_LIBRARY_PATH="$(RUNTIME_LIBRARY_PATHS)$${LD_LIBRARY_PATH:+
 RUN_MAIN_EXE = sh -c 'status=0; for file do echo "$$file"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$file" || status=1; done; exit $$status' sh
 RUN_MAIN_OLD_EXE = sh -c 'status=0; for file do echo "$$file"; $(RUN_WITH_LIBPATH) timeout 5 ./main-old.exe "$$file" || status=1; done; exit $$status' sh
 RUN_BV_DELEGATES = sh -c 'status=0; supported="$$( $(RUN_WITH_LIBPATH) ./main.exe -delegates 2>/dev/null || true )"; enabled=""; for delegate in $(BV_DELEGATES); do case " $$supported " in *" $$delegate "*) enabled="$${enabled:+$$enabled }$$delegate" ;; *) echo "Skipping unsupported delegate: $$delegate" ;; esac; done; echo "Supported QF_BV delegates: $${enabled:-<none>}"; for delegate in $$enabled; do echo "QF_BV delegate: $$delegate"; for file do if grep -Eq "\(set-logic (QF_)?BV\)" "$$file"; then echo "$$file [delegate=$$delegate]"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe -delegate "$$delegate" "$$file" || status=1; fi; done; done; exit $$status' sh
+RUN_WIDE_PROJECTION = sh -c 'status=0; for spec in "legacy|" "wide=1|-wide-projection 1" "wide=10|-wide-projection 10" "wide=0|-wide-projection 0"; do label="$$(expr "x$$spec" : "x\([^|]*\)")"; flags="$$(expr "x$$spec" : "x[^|]*|\(.*\)")"; echo "Arithmetic projection: $$label"; for file do if grep -Eq "\(set-logic (QF_)?(NRA|LRA|NIA|LIA)\)" "$$file"; then echo "$$file [projection=$$label]"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe $$flags "$$file" || status=1; fi; done; done; exit $$status' sh
 
 TRACING_PACKAGE ?= tracing.v0.17.0
 TRACING_PIN ?= https://github.com/disteph/tracing/archive/refs/heads/main.zip
@@ -56,13 +57,16 @@ clean:
 test: build run-all-tests
 
 run-all-tests:
-	time sh -c 'status=0; for file do echo "$$file"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$file" || status=1; done; if [ $$status -ne 0 ]; then exit $$status; fi; supported="$$( $(RUN_WITH_LIBPATH) ./main.exe -delegates 2>/dev/null || true )"; enabled=""; for delegate in $(BV_DELEGATES); do case " $$supported " in *" $$delegate "*) enabled="$${enabled:+$$enabled }$$delegate" ;; *) echo "Skipping unsupported delegate: $$delegate" ;; esac; done; echo "Supported QF_BV delegates: $${enabled:-<none>}"; for delegate in $$enabled; do echo "QF_BV delegate: $$delegate"; for file do if grep -Eq "\(set-logic (QF_)?BV\)" "$$file"; then echo "$$file [delegate=$$delegate]"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe -delegate "$$delegate" "$$file" || status=1; fi; done; done; exit $$status' sh $(REGRESS_SMT2)
+	time sh -c 'status=0; for file do echo "$$file"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe "$$file" || status=1; done; if [ $$status -ne 0 ]; then exit $$status; fi; for spec in "legacy|" "wide=1|-wide-projection 1" "wide=10|-wide-projection 10" "wide=0|-wide-projection 0"; do label="$$(expr "x$$spec" : "x\([^|]*\)")"; flags="$$(expr "x$$spec" : "x[^|]*|\(.*\)")"; echo "Arithmetic projection: $$label"; for file do if grep -Eq "\(set-logic (QF_)?(NRA|LRA|NIA|LIA)\)" "$$file"; then echo "$$file [projection=$$label]"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe $$flags "$$file" || status=1; fi; done; done; if [ $$status -ne 0 ]; then exit $$status; fi; supported="$$( $(RUN_WITH_LIBPATH) ./main.exe -delegates 2>/dev/null || true )"; enabled=""; for delegate in $(BV_DELEGATES); do case " $$supported " in *" $$delegate "*) enabled="$${enabled:+$$enabled }$$delegate" ;; *) echo "Skipping unsupported delegate: $$delegate" ;; esac; done; echo "Supported QF_BV delegates: $${enabled:-<none>}"; for delegate in $$enabled; do echo "QF_BV delegate: $$delegate"; for file do if grep -Eq "\(set-logic (QF_)?BV\)" "$$file"; then echo "$$file [delegate=$$delegate]"; $(RUN_WITH_LIBPATH) timeout 5 ./main.exe -delegate "$$delegate" "$$file" || status=1; fi; done; done; exit $$status' sh $(REGRESS_SMT2)
 
 run-test: build
 	time $(RUN_MAIN_EXE) $(REGRESS_SMT2)
 
 run-bv-delegate-test: build
 	time $(RUN_BV_DELEGATES) $(REGRESS_SMT2)
+
+run-wide-projection-test: build
+	time $(RUN_WIDE_PROJECTION) $(REGRESS_SMT2)
 
 NRA:
 	time find ../SMTLib/NRA -follow -name "*.smt2" -exec $(RUN_MAIN_EXE) {} +

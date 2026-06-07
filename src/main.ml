@@ -66,27 +66,49 @@ let args = ref []
 let description = "QE in Yices"
 let print_delegates = ref false
 
-let init_solver : mode option ref = ref None
+let init_config : slice_config option ref = ref None
+let init_recorded = ref false
+let pending_switch : float option ref = ref None
+let solver_set_in_segment = ref false
 
 let force_fail () =
-  if Option.is_some !init_solver then failwith "Trying to force solver more than once."
+  if !solver_set_in_segment then failwith "Trying to force solver more than once."
+
+(* A -switch starts a new run description.  We can only add the event once the
+   next run's options have been parsed, so pending_switch is flushed at the next
+   portfolio delimiter or at the end of argument parsing. *)
+let record_initial () =
+  if not !init_recorded then begin
+    init_config := Some (make_slice_config ());
+    init_recorded := true
+  end
+
+let flush_pending_switch () =
+  match !pending_switch with
+  | None -> ()
+  | Some delay ->
+      events := (delay, make_slice_config ()) :: !events;
+      pending_switch := None
+
+let start_next_segment () =
+  solver_set_in_segment := false
 
 let set_mcsat () =
   force_fail();
-  if Option.is_none !init_solver then init_solver := Some `MCSAT;
-  ysolver := Some `MCSAT
+  ysolver := Some `MCSAT;
+  solver_set_in_segment := true
 
 let set_cdclT = function
   | "Eq" | "eq" | "EQ" ->
       force_fail();
       let solver = Some (`CDCLT `Eq) in
-      init_solver := solver;
-      ysolver := solver
+      ysolver := solver;
+      solver_set_in_segment := true
   | "Ineq" | "ineq" | "INEQ" | "Neq" | "neq" | "NEQ" ->
       force_fail();
       let solver = Some (`CDCLT `Ineq) in
-      init_solver := solver;
-      ysolver := solver
+      ysolver := solver;
+      solver_set_in_segment := true
   | s ->
       failwith ("Unknown CDCL(T) assignment mode " ^ s ^ " (expected Eq or Ineq)")
 
@@ -95,17 +117,24 @@ let set_cdclT_default () =
   let solver =
     Some (`CDCLT `Ineq)
   in
-  init_solver := solver;
-  ysolver := solver
+  ysolver := solver;
+  solver_set_in_segment := true
 
-let init_seed = ref None
 let set_seed s =
-  if Option.is_none !init_seed then init_seed := Some s;
   yseed := s
 
-let switch i = events := (float_of_int i,!ysolver,!yseed)::!events
+let switch i =
+  record_initial();
+  flush_pending_switch();
+  pending_switch := Some (float_of_int i);
+  start_next_segment()
+
 let switch_seeds n =
-  create_pool !ysolver !switch_after n
+  record_initial();
+  flush_pending_switch();
+  create_pool !ysolver !switch_after n;
+  yseed := n;
+  start_next_segment()
 
 let set_delegate = function
   | "none" ->
@@ -117,24 +146,31 @@ let set_delegate = function
       failwith ("Delegate " ^ name ^ " is not available in the linked Yices library")
   | name ->
      failwith ("Unknown delegate " ^ name ^ " (expected none, cadical, or cryptominisat)")
+
+let set_wide_projection budget =
+  if budget < 0 then
+    failwith "-wide-projection expects a non-negative integer budget";
+  wide_projection := Some budget
   
 let options = [
   ("-under",          Int(fun u -> underapprox := u), "\t\tDesired number of underapproximations in SAT answers (default is 1)");
   ("-no_bv_invert",   Clear bv_invert, "\tDisables invertibility conditions for BV (default is false, i.e. invertibility conditions are computed)");
+  ("-wide-projection", Int set_wide_projection, "N\tUse wide model projection with cube budget N (0 means unbounded)");
   ("-auto_portfolio", Int(fun t -> timeout := Some(float_of_int t)) , "S\tTriggers sequential auto-portfolio anticipating timeout of S seconds");
   ("-mcsat",    Unit set_mcsat, "\t\tSets solver as MCSAT");
   ("-cdclT",    Unit set_cdclT_default, "\t\tSets solver as CDCL(T) with inequality assumptions");
   ("-cdclT-assumptions", String set_cdclT, "S\tSets CDCL(T) assignment mode (Eq or Ineq)");
   ("-seed",     Int set_seed, "S\t\tSets random seed to S");
-  ("-switch",   Int switch, "T \t\tAfter T seconds, switch to new run using lastly set solver and seed");
-  ("-switch_seeds", Tuple [Int (fun i -> switch_after := float_of_int i); Int switch_seeds], "T N\tEvery T seconds, for N times, increment the seed and switch to new run using lastly set solver and incremented seed");
+  ("-switch",   Int switch, "T \t\tAfter T seconds, switch to the run described before the next switch or end of arguments");
+  ("-switch_seeds", Tuple [Int (fun i -> switch_after := float_of_int i); Int switch_seeds], "T N\tEvery T seconds, for N times, switch to the current solver with seeds 1..N");
   ("-delegate", String set_delegate, "S\tFor BV/CDCL(T): use SAT delegate S (none, cadical, or cryptominisat)");
   ("-delegates", Set print_delegates, "\tPrint supported SAT delegates and exit");
 ]@Tracing.options;;
 
 Arg.parse options (fun a->args := a::!args) description;;
-ysolver := !init_solver;;
-yseed := Option.get_or ~default:0 !init_seed;;
+record_initial();;
+flush_pending_switch();;
+apply_slice_config (Option.get_exn_or "no initial slice configuration" !init_config);;
 Tracing.compile();;
 
 if !print_delegates then begin
