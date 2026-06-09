@@ -112,23 +112,123 @@ let generalize_model smodel ~true_of_model ~rigid_vars ~newvars =
       epsilons = epsilons @ Term.subst_terms subst true_of_model.epsilons
     }
 
-(* denum_elim smodel t:
-   - smodel: used to evaluate denominators
+let model_value_as_term smodel t =
+  SModel.get_value_as_term smodel t |> Option.get_exn_or "no term value"
+
+let model_value_as_rational smodel t =
+  model_value_as_term smodel t |> Term.rational_const_value
+
+let model_value_as_bool smodel t =
+  let value = model_value_as_term smodel t in
+  if Term.equal value (Term.true0()) then true
+  else if Term.equal value (Term.false0()) then false
+  else failwith "no Boolean value"
+
+let int_rational z =
+  Term.Arith.mpq (Q.of_bigint z)
+
+let floor_rational q =
+  Z.fdiv (Q.num q) (Q.den q)
+
+let ceil_rational q =
+  Z.cdiv (Q.num q) (Q.den q)
+
+let rational_term q =
+  Term.Arith.mpq q
+
+(* projection_preprocess smodel t:
+   - smodel: used to evaluate selected arguments of arithmetic constructs
    - t: term to rewrite
-   Rewrites rational division into multiplication by the inverse of the
-   model-evaluated denominator. If the denominator is 0, it raises
-   Division_by_zero so callers can fall back to a safer path. *)
-let rec denum_elim smodel t =
+   Rewrites arithmetic constructs that Yices projection does not accept as
+   arithmetic subterms, and conjoins guards that make the rewritten formula
+   imply the original formula. If a divisor is 0, it raises Division_by_zero
+   so callers can fall back to a safer path. *)
+let rec projection_preprocess_aux smodel t =
   match Term.reveal t with
-  | Term(A0 _) -> t
+  | Term(A0 _) -> t, []
   | Term(A2(`YICES_RDIV, num, denum)) ->
-     let num = denum_elim smodel num in
-     let denum = SModel.get_value_as_term smodel denum |> Option.get_exn_or "no term value" |> Term.rational_const_value in
-     if Q.(equal denum zero) then raise Division_by_zero
+     let num, num_guards = projection_preprocess_aux smodel num in
+     let denum, denum_guards = projection_preprocess_aux smodel denum in
+     let denum_value = model_value_as_rational smodel denum in
+     if Q.(equal denum_value zero) then raise Division_by_zero
      else
-       let cst = denum |> Q.inv |> Term.Arith.mpq in
-       Term.Arith.mul cst num
-  | Term b -> Term.(build(map (denum_elim smodel) b))
+       let cst = denum_value |> Q.inv |> rational_term in
+       Term.Arith.mul cst num,
+       num_guards @ denum_guards @ [Term.eq denum (rational_term denum_value)]
+  | Term(A2(`YICES_IDIV, lhs, rhs)) ->
+     let lhs', lhs_guards = projection_preprocess_aux smodel lhs in
+     let rhs', rhs_guards = projection_preprocess_aux smodel rhs in
+     let rhs_value = model_value_as_rational smodel rhs in
+     let guards = lhs_guards @ rhs_guards in
+     if Q.(equal rhs_value zero) then raise Division_by_zero
+     else if Term.is_int lhs && Q.(equal rhs_value one) then
+       lhs', guards @ [Term.eq rhs' (rational_term rhs_value)]
+     else if Term.is_int lhs && Q.(equal rhs_value minus_one) then
+       Term.Arith.neg lhs', guards @ [Term.eq rhs' (rational_term rhs_value)]
+     else
+       model_value_as_term smodel t,
+       guards @ [
+         Term.eq lhs' (model_value_as_term smodel lhs);
+         Term.eq rhs' (model_value_as_term smodel rhs);
+       ]
+  | Term(A2(`YICES_IMOD, lhs, rhs)) ->
+     let lhs', lhs_guards = projection_preprocess_aux smodel lhs in
+     let rhs', rhs_guards = projection_preprocess_aux smodel rhs in
+     let rhs_value = model_value_as_rational smodel rhs in
+     let guards = lhs_guards @ rhs_guards in
+     if Q.(equal rhs_value zero) then raise Division_by_zero
+     else if Term.is_int lhs && Q.(equal rhs_value one || equal rhs_value minus_one) then
+       Term.Arith.zero(), guards @ [Term.eq rhs' (rational_term rhs_value)]
+     else
+       model_value_as_term smodel t,
+       guards @ [
+         Term.eq lhs' (model_value_as_term smodel lhs);
+         Term.eq rhs' (model_value_as_term smodel rhs);
+       ]
+  | Term(A1(`YICES_ABS, arg)) ->
+     let arg', guards = projection_preprocess_aux smodel arg in
+     let arg_value = model_value_as_rational smodel arg in
+     let zero = Term.Arith.zero() in
+     if Q.(geq arg_value zero) then
+       arg', guards @ [Term.Arith.geq arg' zero]
+     else
+       Term.Arith.neg arg', guards @ [Term.Arith.leq arg' zero]
+  | Term(A1(`YICES_FLOOR, arg)) ->
+     let arg', guards = projection_preprocess_aux smodel arg in
+     if Term.is_int arg then arg', guards
+     else
+       let k = model_value_as_rational smodel arg |> floor_rational in
+       let k_term = int_rational k in
+       let k_plus_one = int_rational Z.(k + one) in
+       k_term, guards @ [Term.Arith.leq k_term arg'; Term.Arith.lt arg' k_plus_one]
+  | Term(A1(`YICES_CEIL, arg)) ->
+     let arg', guards = projection_preprocess_aux smodel arg in
+     if Term.is_int arg then arg', guards
+     else
+       let k = model_value_as_rational smodel arg |> ceil_rational in
+       let k_term = int_rational k in
+       let k_minus_one = int_rational Z.(k - one) in
+       k_term, guards @ [Term.Arith.lt k_minus_one arg'; Term.Arith.leq arg' k_term]
+  | Term(ITE(cond, then_branch, else_branch)) when Term.is_arithmetic t ->
+     let cond', cond_guards = projection_preprocess_aux smodel cond in
+     if model_value_as_bool smodel cond then
+       let then_branch', then_guards = projection_preprocess_aux smodel then_branch in
+       then_branch', cond_guards @ then_guards @ [cond']
+     else
+       let else_branch', else_guards = projection_preprocess_aux smodel else_branch in
+       else_branch', cond_guards @ else_guards @ [Term.not1 cond']
+  | Term b ->
+     let guards = ref [] in
+     let rewrite_child t =
+       let t, t_guards = projection_preprocess_aux smodel t in
+       guards := !guards @ t_guards;
+       t
+     in
+     Term.(build(map rewrite_child b)), !guards
+
+and projection_preprocess smodel t =
+  let t, guards = projection_preprocess_aux smodel t in
+  Term.andN (t::guards)
 
 (* generalize_model ~logic smodel ~true_of_model ~rigid_vars ~newvars:
    - logic: target theory; selects the generalization strategy
@@ -149,7 +249,7 @@ let generalize_model ~logic smodel ~true_of_model ~rigid_vars ~newvars
      begin
        try
          (* For arithmetic logics, try Yices projection after eliminating risky divisions. *)
-         let true_of_model = denum_elim smodel true_of_model in
+         let true_of_model = projection_preprocess smodel true_of_model in
          (match !Command_options.wide_projection with
           | Some cube_budget ->
               SModel.generalize_model_with_budget smodel true_of_model newvars
