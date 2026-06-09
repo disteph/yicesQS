@@ -143,12 +143,12 @@ let generalize_model ~logic smodel ~true_of_model ~rigid_vars ~newvars
   match logic with
   | `NRA
   | `LRA
-  (* | `NIA
-   * | `LIA *)
+  | `NIA
+  | `LIA
     ->
      begin
        try
-         (* For LRA/NRA, try Yices projection after eliminating risky divisions. *)
+         (* For arithmetic logics, try Yices projection after eliminating risky divisions. *)
          let true_of_model = denum_elim smodel true_of_model in
          (match !Command_options.wide_projection with
           | Some cube_budget ->
