@@ -15,6 +15,7 @@ open Ext
 
 module SMT2 = Yices2.SMT2.Make(Ext)
 open SMT2
+module YicesHigh = Yices2.High.Make(Yices2.High.NoErrorHandling)
 
 open Command_options
 open Utils
@@ -111,6 +112,14 @@ let param_from_seed i logic mode =
   p
 
 let is_qf_bv_logic = String.equal "QF_BV"
+
+let bv_delegate_available = function
+  | None -> true
+  | Some delegate -> YicesHigh.has_delegate delegate
+
+let bv_auto_portfolio_delegates () =
+  List.filter bv_delegate_available
+    [ Some "cadical"; None; Some "cryptominisat" ]
 
 (* solve ?compute_over state level smodel support:
    - compute_over: if true, compute a model interpolant on UNSAT
@@ -456,12 +465,38 @@ let create_events logic =
       `CDCLT `Ineq
     | "QF_BV" ->
       if auto_portfolio then begin
-        events := (24.5 /. 1200. *. timeout,
-                   make_slice_config ~mode:(Some (`CDCLT `Eq)) ~seed:0 ()) :: !events;
-        create_pool (Some (`CDCLT `Eq)) small_switch 10;
-        events := (700. /. 1200. *. timeout,
-                   make_slice_config ~mode:(Some `MCSAT) ~seed:0 ()) :: !events;
-        create_pool (Some `MCSAT) small_switch 10
+        match bv_auto_portfolio_delegates () with
+        | first :: rest ->
+           delegate := first;
+           let add_cdclt_stage delay delegate =
+             events := (delay,
+                        make_slice_config
+                          ~mode:(Some (`CDCLT `Eq))
+                          ~seed:0
+                          ~delegate
+                          ()) :: !events
+           in
+           let add_mcsat_stage delay =
+             events := (delay,
+                        make_slice_config
+                          ~mode:(Some `MCSAT)
+                          ~seed:0
+                          ~delegate:None
+                          ()) :: !events
+           in
+           begin
+             match rest with
+             | [] ->
+                add_mcsat_stage (0.8 *. timeout)
+             | [second] ->
+                add_cdclt_stage (0.4 *. timeout) second;
+                add_mcsat_stage (0.2 *. timeout)
+             | second :: third :: _ ->
+                add_cdclt_stage (0.4 *. timeout) second;
+                add_cdclt_stage (0.2 *. timeout) third;
+                add_mcsat_stage (0.2 *. timeout)
+           end
+        | [] -> ()
       end;
       `CDCLT `Eq
     | _ -> `MCSAT

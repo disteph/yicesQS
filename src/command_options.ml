@@ -2,7 +2,7 @@ open! Containers
 
 let verbosity = ref 0
 let timeout : float option ref = ref None
-let underapprox = ref 1
+let underapprox = ref 20
 let bv_invert = ref true
 type mode = [`CDCLT of [`Eq | `Ineq] | `MCSAT ]
 let ysolver : mode option ref = ref None
@@ -20,10 +20,10 @@ type slice_config = {
   bv_invert: bool;
 }
 
-let make_slice_config ?(mode = !ysolver) ?(seed = !yseed) () = {
+let make_slice_config ?(mode = !ysolver) ?(seed = !yseed) ?(delegate = !delegate) () = {
   mode;
   seed;
-  delegate = !delegate;
+  delegate;
   wide_projection = !wide_projection;
   underapprox = !underapprox;
   bv_invert = !bv_invert;
@@ -39,7 +39,7 @@ let apply_slice_config config =
 
 let events : (float * slice_config) list ref = ref []
 
-let create_pool mode delay n =
+let create_pool ?delegate mode delay n =
   for i = 0 to n-1 do
-    events := (delay, make_slice_config ~mode ~seed:(i+1) ()) :: !events
+    events := (delay, make_slice_config ~mode ~seed:(i+1) ?delegate ()) :: !events
   done

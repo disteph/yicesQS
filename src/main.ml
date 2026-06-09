@@ -153,7 +153,7 @@ let set_wide_projection budget =
   wide_projection := Some budget
   
 let options = [
-  ("-under",          Int(fun u -> underapprox := u), "\t\tDesired number of underapproximations in SAT answers (default is 1)");
+  ("-under",          Int(fun u -> underapprox := u), "\t\tDesired number of underapproximations in SAT answers (default is 20)");
   ("-no_bv_invert",   Clear bv_invert, "\tDisables invertibility conditions for BV (default is false, i.e. invertibility conditions are computed)");
   ("-wide-projection", Int set_wide_projection, "N\tUse wide model projection with cube budget N (0 means unbounded)");
   ("-auto_portfolio", Int(fun t -> timeout := Some(float_of_int t)) , "S\tTriggers sequential auto-portfolio anticipating timeout of S seconds");

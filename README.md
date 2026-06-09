@@ -130,7 +130,8 @@ Useful options:
 -no_bv_invert    Disable BV invertibility conditions
 -mcsat           Force MCSAT
 -cdclT           Force CDCL(T)
--cdclT-mcsat N   In BV: use CDCL(T) for up to N seconds, then switch to MCSAT
+-auto_portfolio S
+                 Sequential auto-portfolio anticipating timeout S
 -delegate S      For BV/CDCL(T): use delegate S
 -delegates       Print supported delegates
 ```
@@ -174,6 +175,8 @@ Run with a delegate:
 ```
 
 `-delegate none` is accepted as an explicit way to clear delegate selection; it follows the same solver path as omitting `-delegate`.
+
+For BV, `-auto_portfolio S` starts with CaDiCaL when it is available, then switches to native Yices SAT, then to CryptoMiniSat when it is available, then to MCSAT. With all delegates available, the intended split is 40% CaDiCaL, 20% native Yices SAT, 20% CryptoMiniSat, and the remaining 20% MCSAT.
 
 ## Static Linking
 
