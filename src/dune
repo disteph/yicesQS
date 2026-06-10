@@ -24,10 +24,12 @@
   (link_flags
    (:standard
     -ccopt -static
+    -ccopt -Wl,--allow-multiple-definition
     -ccopt -Wl,--start-group
     -cclib -lyices
     -cclib -lcadical
     -cclib -lcryptominisat5
+    -cclib -lkissat
     -cclib -lcudd
     -ccopt -Wl,--end-group
     -cclib -lstdc++
