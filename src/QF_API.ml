@@ -218,7 +218,9 @@ let rec projection_preprocess_aux smodel t guards =
        let lower_guard = Term.Arith.lt k_minus_one arg' in
        let upper_guard = Term.Arith.leq arg' k_term in
        k_term, upper_guard :: lower_guard :: guards
-  | Term(ITE(cond, then_branch, else_branch)) when Term.is_arithmetic t ->
+  | Term(ITE(cond, then_branch, else_branch)) ->
+     (* Recurse only into the model-selected branch; dead branches may contain
+        irrelevant divisors or guards that should not constrain projection. *)
      let cond', guards = projection_preprocess_aux smodel cond guards in
      if model_value_as_bool smodel cond then
        let then_branch', guards = projection_preprocess_aux smodel then_branch guards in
