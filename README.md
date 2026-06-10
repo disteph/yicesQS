@@ -123,32 +123,86 @@ After building, run:
 
 The solver prints `sat` or `unsat` on standard output.
 
-Useful options:
+Command-line options:
 
 ```text
--under N          Desired number of underapproximations in SAT answers
--no_bv_invert    Disable BV invertibility conditions
--mcsat           Force MCSAT
--cdclT           Force CDCL(T)
+-under N
+    Desired number of underapproximations in SAT answers. Default: 20.
+-no_bv_invert
+    Disable BV invertibility conditions. By default, BV invertibility
+    conditions are computed.
+-wide-projection N
+    Use wide arithmetic model projection with cube budget N. Use 0 for an
+    unbounded cube budget.
 -auto_portfolio S
-                 Sequential auto-portfolio anticipating timeout S
--delegate S      For BV/CDCL(T): use delegate S
--delegates       Print supported delegates
-```
-
-Trace/debug options are also available:
-
-```text
+    Enable the built-in sequential portfolio for the input logic, anticipating
+    an external timeout of S seconds.
+-mcsat
+    Force MCSAT.
+-cdclT
+    Force CDCL(T) with inequality assumptions.
+-cdclT-assumptions Eq|Ineq
+    Force CDCL(T) and choose equality or inequality assumptions.
+-seed S
+    Set the Yices random seed to S.
+-switch T
+    Run the current solver configuration for T seconds, then switch to the
+    configuration described by subsequent options, up to the next switch
+    delimiter or the end of the command line.
+-switch_seeds T N
+    Add N switch segments for the current solver configuration, each T seconds
+    long, using seeds 1 through N.
+-delegate none|cadical|cryptominisat
+    For BV/CDCL(T), use a Yices SAT delegate. `none` clears delegate selection.
+-delegates
+    Print supported SAT delegates and exit.
 -trace PATTERN
+    Enable tracing according to PATTERN.
 -step
+    Step through the last trace.
 -filedump PREFIX
+    Dump input and trace files under PREFIX on selected errors.
+-help, --help
+    Display the full option list and exit.
 ```
 
-Run the executable with `-help` for the full option list:
+Portfolio options are order-sensitive. For example, this runs MCSAT for 10
+seconds, then CDCL(T) with equality assumptions for 20 seconds, then continues
+with the final configuration:
+
+```sh
+./main.exe -mcsat -switch 10 -cdclT-assumptions Eq -switch 20 file.smt2
+```
+
+Run the executable with `-help` to print the option list from the binary:
 
 ```sh
 ./main.exe -help
 ```
+
+## Auto Portfolio
+
+`-auto_portfolio S` enables a built-in sequential portfolio for the input
+logic, with slice lengths scaled to an expected external timeout of `S`
+seconds. It only takes effect when no explicit switch portfolio was already
+specified.
+
+For `NRA` and `NIA`, the portfolio uses MCSAT throughout. It enables unbounded
+wide projection, runs MCSAT seed 0 for `24.5 / 1200 * S` seconds, then tries 20
+short MCSAT seed slices of `5 / 1200 * S` seconds each.
+
+For `LRA`, the portfolio uses MCSAT throughout. After the initial seed-0 run,
+it tries seeds 1 through 3, with each timed slice using `S / 4` seconds.
+
+For `LIA`, the portfolio uses CDCL(T) with inequality assumptions throughout.
+After the initial seed-0 run, it tries seeds 1 through 5, with each timed slice
+using `S / 6` seconds.
+
+For `BV`, the portfolio starts with native CDCL(T) with equality assumptions,
+then tries 10 short native CDCL(T) seed slices, then switches to MCSAT followed
+by 10 short MCSAT seed slices. For `S = 1200`, the intended split is 24.5
+seconds of native CDCL(T), 10 five-second native CDCL(T) seed slices, 700
+seconds of MCSAT, and 10 five-second MCSAT seed slices.
 
 ## Delegate SAT Solvers
 
@@ -176,8 +230,6 @@ Run with a delegate:
 
 `-delegate none` is accepted as an explicit way to clear delegate selection; it follows the same solver path as omitting `-delegate`.
 
-For BV, `-auto_portfolio S` starts with CaDiCaL when it is available, then switches to native Yices SAT, then to CryptoMiniSat when it is available, then to MCSAT. With all delegates available, the intended split is 40% CaDiCaL, 20% native Yices SAT, 20% CryptoMiniSat, and the remaining 20% MCSAT.
-
 ## Static Linking
 
 Static builds are configured by:
@@ -187,7 +239,7 @@ Static builds are configured by:
 make build
 ```
 
-On Linux, the build uses the Dune `static` profile. The current profile links Yices and the delegate/archive dependencies explicitly, including CaDiCaL, CryptoMiniSat, Kissat, CUDD, libpoly, GMP, zlib, pthread, and the C++ runtime.
+On Linux, the build uses the Dune `static` profile. The current profile links Yices and the delegate/archive dependencies explicitly, including CaDiCaL, CryptoMiniSat, CUDD, libpoly, GMP, zlib, pthread, and the C++ runtime.
 
 Check the result with:
 
