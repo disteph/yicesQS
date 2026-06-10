@@ -147,28 +147,112 @@ let ceil_rational q =
 let rational_term q =
   Term.Arith.mpq q
 
-(* projection_preprocess smodel t:
+type projection_preprocess_mode =
+  | Linear_real
+  | Nonlinear_real
+  | Integer_arith
+  | Other_logic
+
+let projection_preprocess_mode_of_logic = function
+  | `NRA -> Nonlinear_real
+  | `LRA -> Linear_real
+  | `NIA
+  | `LIA -> Integer_arith
+  | `BV
+  | `Other -> Other_logic
+
+exception Projection_preprocess_unsupported
+
+let zero_term = Term.Arith.zero
+let one_term () = rational_term Q.one
+
+let rational_const_opt t =
+  match Term.reveal t with
+  | Term(A0(`YICES_ARITH_CONSTANT, _)) -> Some (Term.rational_const_value t)
+  | _ -> None
+
+let is_rational_const q t =
+  match rational_const_opt t with
+  | Some q' -> Q.equal q q'
+  | None -> false
+
+let arith_neg t =
+  if is_rational_const Q.zero t then zero_term() else Term.Arith.neg t
+
+let arith_add a b =
+  if is_rational_const Q.zero a then b
+  else if is_rational_const Q.zero b then a
+  else Term.Arith.add a b
+
+let arith_sub a b =
+  if is_rational_const Q.zero b then a
+  else if is_rational_const Q.zero a then arith_neg b
+  else Term.Arith.sub a b
+
+let arith_mul a b =
+  if is_rational_const Q.zero a || is_rational_const Q.zero b then zero_term()
+  else if is_rational_const Q.one a then b
+  else if is_rational_const Q.one b then a
+  else Term.Arith.mul a b
+
+let arith_mul_const q t =
+  if Q.equal q Q.zero then zero_term()
+  else if Q.equal q Q.one then t
+  else if Q.equal q Q.minus_one then arith_neg t
+  else arith_mul (rational_term q) t
+
+let rebuild_rdiv num denum =
+  Term.build (A2(`YICES_RDIV, num, denum))
+
+type model_sign = Pos | Neg
+
+let model_sign_and_guard smodel t =
+  match rational_const_opt t with
+  | Some q ->
+     if Q.(equal q zero) then None
+     else if Q.(gt q zero) then Some (Pos, None)
+     else Some (Neg, None)
+  | None ->
+     try
+       let value = model_value_as_rational smodel t in
+       if Q.(equal value zero) then None
+       else if Q.(gt value zero) then
+         Some (Pos, Some (Term.Arith.gt t (zero_term())))
+       else
+         Some (Neg, Some (Term.Arith.lt t (zero_term())))
+     with _ -> None
+
+let add_optional_guard guard guards =
+  match guard with
+  | Some guard -> guard :: guards
+  | None -> guards
+
+(* projection_eliminate_constructs mode smodel t guards:
    - smodel: used to evaluate selected arguments of arithmetic constructs
    - t: term to rewrite
-   Rewrites arithmetic constructs that Yices projection does not accept as
-   arithmetic subterms, and conjoins guards that make the rewritten formula
-   imply the original formula. If a divisor is 0, it raises Division_by_zero
-   so callers can fall back to a safer path. *)
-let rec projection_preprocess_aux smodel t guards =
+   First pass: eliminate model-selected arithmetic constructs that Yices
+   projection does not accept, but keep symbolic real division in NRA for the
+   atom-level denominator-clearing pass. *)
+let rec projection_eliminate_constructs mode smodel t guards =
   match Term.reveal t with
   | Term(A0 _) -> t, guards
   | Term(A2(`YICES_RDIV, num, denum)) ->
-     let num, guards = projection_preprocess_aux smodel num guards in
-     let denum, guards = projection_preprocess_aux smodel denum guards in
-     let denum_value = model_value_as_rational smodel denum in
-     if Q.(equal denum_value zero) then raise Division_by_zero
-     else
-       let cst = denum_value |> Q.inv |> rational_term in
-       Term.Arith.mul cst num,
-       Term.eq denum (rational_term denum_value) :: guards
+     let num, guards = projection_eliminate_constructs mode smodel num guards in
+     let denum, guards = projection_eliminate_constructs mode smodel denum guards in
+     begin
+       match rational_const_opt denum with
+       | Some q when not (Q.(equal q zero)) ->
+          arith_mul (rational_term (Q.inv q)) num, guards
+       | _ ->
+          match mode with
+          | Nonlinear_real -> rebuild_rdiv num denum, guards
+          | Linear_real
+          | Integer_arith
+          | Other_logic -> raise Projection_preprocess_unsupported
+     end
   | Term(A2(`YICES_IDIV, lhs, rhs)) ->
-     let lhs', guards = projection_preprocess_aux smodel lhs guards in
-     let rhs', guards = projection_preprocess_aux smodel rhs guards in
+     let lhs', guards = projection_eliminate_constructs mode smodel lhs guards in
+     let rhs', guards = projection_eliminate_constructs mode smodel rhs guards in
      let rhs_value = model_value_as_rational smodel rhs in
      if Q.(equal rhs_value zero) then raise Division_by_zero
      else if Term.is_int lhs && Q.(equal rhs_value one) then
@@ -180,8 +264,8 @@ let rec projection_preprocess_aux smodel t guards =
        let rhs_guard = Term.eq rhs' (model_value_as_term smodel rhs) in
        model_value_as_term smodel t, rhs_guard :: lhs_guard :: guards
   | Term(A2(`YICES_IMOD, lhs, rhs)) ->
-     let lhs', guards = projection_preprocess_aux smodel lhs guards in
-     let rhs', guards = projection_preprocess_aux smodel rhs guards in
+     let lhs', guards = projection_eliminate_constructs mode smodel lhs guards in
+     let rhs', guards = projection_eliminate_constructs mode smodel rhs guards in
      let rhs_value = model_value_as_rational smodel rhs in
      if Q.(equal rhs_value zero) then raise Division_by_zero
      else if Term.is_int lhs && Q.(equal rhs_value one || equal rhs_value minus_one) then
@@ -191,7 +275,7 @@ let rec projection_preprocess_aux smodel t guards =
        let rhs_guard = Term.eq rhs' (model_value_as_term smodel rhs) in
        model_value_as_term smodel t, rhs_guard :: lhs_guard :: guards
   | Term(A1(`YICES_ABS, arg)) ->
-     let arg', guards = projection_preprocess_aux smodel arg guards in
+     let arg', guards = projection_eliminate_constructs mode smodel arg guards in
      let arg_value = model_value_as_rational smodel arg in
      let zero = Term.Arith.zero() in
      if Q.(geq arg_value zero) then
@@ -199,7 +283,7 @@ let rec projection_preprocess_aux smodel t guards =
      else
        Term.Arith.neg arg', Term.Arith.leq arg' zero :: guards
   | Term(A1(`YICES_FLOOR, arg)) ->
-     let arg', guards = projection_preprocess_aux smodel arg guards in
+     let arg', guards = projection_eliminate_constructs mode smodel arg guards in
      if Term.is_int arg then arg', guards
      else
        let k = model_value_as_rational smodel arg |> floor_rational in
@@ -209,7 +293,7 @@ let rec projection_preprocess_aux smodel t guards =
        let upper_guard = Term.Arith.lt arg' k_plus_one in
        k_term, upper_guard :: lower_guard :: guards
   | Term(A1(`YICES_CEIL, arg)) ->
-     let arg', guards = projection_preprocess_aux smodel arg guards in
+     let arg', guards = projection_eliminate_constructs mode smodel arg guards in
      if Term.is_int arg then arg', guards
      else
        let k = model_value_as_rational smodel arg |> ceil_rational in
@@ -221,21 +305,216 @@ let rec projection_preprocess_aux smodel t guards =
   | Term(ITE(cond, then_branch, else_branch)) ->
      (* Recurse only into the model-selected branch; dead branches may contain
         irrelevant divisors or guards that should not constrain projection. *)
-     let cond', guards = projection_preprocess_aux smodel cond guards in
+     let cond', guards = projection_eliminate_constructs mode smodel cond guards in
      if model_value_as_bool smodel cond then
-       let then_branch', guards = projection_preprocess_aux smodel then_branch guards in
+       let then_branch', guards = projection_eliminate_constructs mode smodel then_branch guards in
        then_branch', cond' :: guards
      else
-       let else_branch', guards = projection_preprocess_aux smodel else_branch guards in
+       let else_branch', guards = projection_eliminate_constructs mode smodel else_branch guards in
        else_branch', Term.not1 cond' :: guards
   | Term b ->
-     let t, guards = GuardMTerm.map (projection_preprocess_aux smodel) b guards in
+     let t, guards = GuardMTerm.map (projection_eliminate_constructs mode smodel) b guards in
      let t = Term.build t in
      t, guards
 
-let projection_preprocess smodel t =
-  let t', guards = projection_preprocess_aux smodel t [] in
-  Term.andN (t'::guards)
+type frac = {
+  num : Term.t;
+  den : Term.t;
+  guards : Term.t list;
+}
+
+let frac_of_term t = { num = t; den = one_term(); guards = [] }
+let frac_zero () = frac_of_term (zero_term())
+let frac_one () = frac_of_term (one_term())
+
+let frac_add a b =
+  {
+    num = arith_add (arith_mul a.num b.den) (arith_mul b.num a.den);
+    den = arith_mul a.den b.den;
+    guards = a.guards @ b.guards;
+  }
+
+let frac_sub a b =
+  {
+    num = arith_sub (arith_mul a.num b.den) (arith_mul b.num a.den);
+    den = arith_mul a.den b.den;
+    guards = a.guards @ b.guards;
+  }
+
+let frac_mul a b =
+  {
+    num = arith_mul a.num b.num;
+    den = arith_mul a.den b.den;
+    guards = a.guards @ b.guards;
+  }
+
+let frac_mul_const q a =
+  { a with num = arith_mul_const q a.num }
+
+let rec frac_pow a n =
+  if n = 0 then Some (frac_one())
+  else if n = 1 then Some a
+  else
+    match frac_pow a (n - 1) with
+    | Some p -> Some (frac_mul a p)
+    | None -> None
+
+let rec fraction_of_arith smodel t =
+  if not (Term.is_arithmetic t) then None
+  else
+    match Term.reveal t with
+    | Term(A0(`YICES_ARITH_CONSTANT, _))
+    | Term(A0(`YICES_VARIABLE, _))
+    | Term(A0(`YICES_UNINTERPRETED_TERM, _)) ->
+       Some (frac_of_term t)
+    | Term(Sum terms) ->
+       let treat_term acc (coeff, base) =
+         match acc with
+         | None -> None
+         | Some acc ->
+            let term_frac =
+              match base with
+              | None -> Some (frac_of_term (rational_term coeff))
+              | Some base ->
+                 fraction_of_arith smodel base
+                 |> Option.map (frac_mul_const coeff)
+            in
+            Option.map (frac_add acc) term_frac
+       in
+       List.fold_left treat_term (Some (frac_zero())) terms
+    | Term(Product(false, factors)) ->
+       let treat_factor acc (base, exponent) =
+         match acc with
+         | None -> None
+         | Some acc ->
+            let exponent = Unsigned.UInt.to_int exponent in
+            begin
+              match fraction_of_arith smodel base with
+              | Some base ->
+                 begin
+                   match frac_pow base exponent with
+                   | Some factor -> Some (frac_mul acc factor)
+                   | None -> None
+                 end
+              | None -> None
+            end
+       in
+       List.fold_left treat_factor (Some (frac_one())) factors
+    | Term(Product(true, _)) -> None
+    | Term(A2(`YICES_RDIV, lhs, rhs)) ->
+       begin
+         match fraction_of_arith smodel lhs, fraction_of_arith smodel rhs with
+         | Some lhs, Some rhs ->
+            begin
+              match model_sign_and_guard smodel rhs.num with
+              | None -> None
+              | Some (_, guard) ->
+                 Some {
+                     num = arith_mul lhs.num rhs.den;
+                     den = arith_mul lhs.den rhs.num;
+                     guards = add_optional_guard guard (lhs.guards @ rhs.guards);
+                   }
+            end
+         | _ -> None
+       end
+    | Term(A1(`YICES_ABS, _))
+    | Term(A1(`YICES_CEIL, _))
+    | Term(A1(`YICES_FLOOR, _))
+    | Term(A1(`YICES_IS_INT_ATOM, _))
+    | Term(A2(`YICES_IDIV, _, _))
+    | Term(A2(`YICES_IMOD, _, _))
+    | Term(A2(`YICES_ARITH_ROOT_ATOM, _, _))
+    | Term(ITE _)
+    | Term(App _)
+    | Term(Update _)
+    | Term(Bindings _)
+    | Term(Projection _)
+    | Term(Astar _) -> None
+    | Term _ -> None
+
+type atom_rewrite =
+  | Rewritten of Term.t * Term.t list
+  | Unchanged
+
+let rewrite_arith_atom smodel kind lhs rhs =
+  match fraction_of_arith smodel lhs, fraction_of_arith smodel rhs with
+  | Some lhs, Some rhs ->
+     let diff = frac_sub lhs rhs in
+     begin
+       match model_sign_and_guard smodel diff.den with
+       | None -> Unchanged
+       | Some (sign, den_guard) ->
+          let guards = add_optional_guard den_guard diff.guards in
+          let zero = zero_term() in
+          let atom =
+            match kind, sign with
+            | `Eq, _ -> Term.eq diff.num zero
+            | `Neq, _ -> Term.not1 (Term.eq diff.num zero)
+            | `Geq, Pos -> Term.Arith.geq diff.num zero
+            | `Geq, Neg -> Term.Arith.leq diff.num zero
+            | `Lt, Pos -> Term.Arith.lt diff.num zero
+            | `Lt, Neg -> Term.Arith.gt diff.num zero
+          in
+          Rewritten (atom, guards)
+     end
+  | _ -> Unchanged
+
+let rec clear_real_divisions_in_atoms smodel t guards =
+  match Term.reveal t with
+  | Term(A2(`YICES_EQ_TERM, lhs, rhs))
+       when Term.is_arithmetic lhs && Term.is_arithmetic rhs ->
+     begin
+       match rewrite_arith_atom smodel `Eq lhs rhs with
+       | Rewritten (t, new_guards) -> t, new_guards @ guards
+       | Unchanged -> t, guards
+     end
+  | Term(A2(`YICES_ARITH_GE_ATOM, lhs, rhs)) ->
+     begin
+       match rewrite_arith_atom smodel `Geq lhs rhs with
+       | Rewritten (t, new_guards) -> t, new_guards @ guards
+       | Unchanged -> t, guards
+     end
+  | Term(A1(`YICES_NOT_TERM, atom)) ->
+     begin
+       match Term.reveal atom with
+       | Term(A2(`YICES_EQ_TERM, lhs, rhs))
+            when Term.is_arithmetic lhs && Term.is_arithmetic rhs ->
+          begin
+            match rewrite_arith_atom smodel `Neq lhs rhs with
+            | Rewritten (t, new_guards) -> t, new_guards @ guards
+            | Unchanged -> t, guards
+          end
+       | Term(A2(`YICES_ARITH_GE_ATOM, lhs, rhs)) ->
+          begin
+            match rewrite_arith_atom smodel `Lt lhs rhs with
+            | Rewritten (t, new_guards) -> t, new_guards @ guards
+            | Unchanged -> t, guards
+          end
+       | _ ->
+          let atom, guards = clear_real_divisions_in_atoms smodel atom guards in
+          Term.not1 atom, guards
+     end
+  | Term(A0 _) -> t, guards
+  | Term b ->
+     let t, guards = GuardMTerm.map (clear_real_divisions_in_atoms smodel) b guards in
+     Term.build t, guards
+
+let projection_preprocess ~logic smodel t =
+  let mode = projection_preprocess_mode_of_logic logic in
+  let t, guards = projection_eliminate_constructs mode smodel t [] in
+  match mode with
+  | Nonlinear_real ->
+     let t, guards2 = clear_real_divisions_in_atoms smodel t [] in
+     let process_guard (guards, extra_guards) guard =
+       let guard, extra_guards = clear_real_divisions_in_atoms smodel guard extra_guards in
+       guard :: guards, extra_guards
+     in
+     let guards, extra_guards = List.fold_left process_guard ([], guards2) guards in
+     Term.andN (t :: List.rev_append guards extra_guards)
+  | Linear_real
+  | Integer_arith
+  | Other_logic ->
+     Term.andN (t :: guards)
 
 (* generalize_model ~logic smodel ~true_of_model ~rigid_vars ~newvars:
    - logic: target theory; selects the generalization strategy
@@ -260,7 +539,7 @@ let generalize_model ~logic smodel ~true_of_model ~rigid_vars ~newvars
      begin
        try
          (* For arithmetic logics, try Yices projection after eliminating risky divisions. *)
-         let true_of_model' = projection_preprocess smodel true_of_model in
+         let true_of_model' = projection_preprocess ~logic smodel true_of_model in
          let preprocessed = not (Term.equal true_of_model true_of_model') in
          let projection =
            match !Command_options.wide_projection with

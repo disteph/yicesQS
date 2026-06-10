@@ -1,0 +1,11 @@
+(set-info :smt-lib-version 2.6)
+(set-logic NRA)
+(set-info :status sat)
+(declare-fun y () Real)
+(assert (= y 0.0))
+(assert
+  (forall ((x Real))
+    (or (= (/ x y) 0.0)
+        (= x x))))
+(check-sat)
+(exit)
