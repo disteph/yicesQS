@@ -117,10 +117,6 @@ let bv_delegate_available = function
   | None -> true
   | Some delegate -> YicesHigh.has_delegate delegate
 
-let bv_auto_portfolio_delegates () =
-  List.filter bv_delegate_available
-    [ Some "cadical"; None; Some "cryptominisat" ]
-
 (* solve ?compute_over state level smodel support:
    - compute_over: if true, compute a model interpolant on UNSAT
    - state: solver state (contexts, logic, counters)
@@ -465,38 +461,44 @@ let create_events logic =
       `CDCLT `Ineq
     | "QF_BV" ->
       if auto_portfolio then begin
-        match bv_auto_portfolio_delegates () with
-        | first :: rest ->
-           delegate := first;
-           let add_cdclt_stage delay delegate =
-             events := (delay,
-                        make_slice_config
-                          ~mode:(Some (`CDCLT `Eq))
-                          ~seed:0
-                          ~delegate
-                          ()) :: !events
-           in
-           let add_mcsat_stage delay =
-             events := (delay,
-                        make_slice_config
-                          ~mode:(Some `MCSAT)
-                          ~seed:0
-                          ~delegate:None
-                          ()) :: !events
-           in
-           begin
-             match rest with
-             | [] ->
-                add_mcsat_stage (0.8 *. timeout)
-             | [second] ->
-                add_cdclt_stage (0.4 *. timeout) second;
-                add_mcsat_stage (0.2 *. timeout)
-             | second :: third :: _ ->
-                add_cdclt_stage (0.4 *. timeout) second;
-                add_cdclt_stage (0.2 *. timeout) third;
-                add_mcsat_stage (0.2 *. timeout)
-           end
-        | [] -> ()
+        let quick_slices = 10 in
+        let quick_total = float_of_int quick_slices *. small_switch in
+        let native_stage = 0.2 *. timeout in
+        let mcsat_stage = 0.25 *. timeout in
+        let native_long = native_stage -. quick_total in
+        let mcsat_long = mcsat_stage -. quick_total in
+        let cadical =
+          if bv_delegate_available (Some "cadical") then Some "cadical" else None
+        in
+        let cryptominisat =
+          if bv_delegate_available (Some "cryptominisat")
+          then Some "cryptominisat"
+          else None
+        in
+        let add_cdclt_stage delay seed delegate =
+          events := (delay,
+                     make_slice_config
+                       ~mode:(Some (`CDCLT `Eq))
+                       ~seed
+                       ~delegate
+                       ()) :: !events
+        in
+        let add_mcsat_stage delay seed =
+          events := (delay,
+                     make_slice_config
+                       ~mode:(Some `MCSAT)
+                       ~seed
+                       ~delegate:None
+                       ()) :: !events
+        in
+        delegate := cadical;
+        add_cdclt_stage (0.4 *. timeout) 0 None;
+        create_pool ~delegate:None (Some (`CDCLT `Eq)) small_switch quick_slices;
+        add_mcsat_stage native_long 0;
+        create_pool ~delegate:None (Some `MCSAT) small_switch quick_slices;
+        Option.iter
+          (fun cryptominisat -> add_cdclt_stage mcsat_long 0 (Some cryptominisat))
+          cryptominisat
       end;
       `CDCLT `Eq
     | _ -> `MCSAT
