@@ -27,10 +27,12 @@ let build_table smodel oldvar newvar =
   (* treat_old var: if a rigid variable has a value already in the table,
      add the variable to the bucket for that value. *)
   let treat_old var =
-    let value = SModel.get_value_as_term smodel var |> Option.get_exn_or "no term value" in
-    match HTerms.find_opt tbl value with
-    | Some l -> HTerms.replace tbl value (var::l)
-    | None   -> ()
+    match SModel.get_value_as_term smodel var with
+    | None -> ()
+    | Some value ->
+       match HTerms.find_opt tbl value with
+       | Some l -> HTerms.replace tbl value (var::l)
+       | None   -> ()
   in
   List.iter treat_old oldvar;
   tbl
