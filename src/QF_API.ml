@@ -5,6 +5,13 @@ open Utils
 
 module HTerms = Types.HTerms
 
+exception NoTermValue of Term.t
+
+let get_value_as_term_exn smodel var =
+  match SModel.get_value_as_term smodel var with
+  | Some value -> value
+  | None -> raise (NoTermValue var)
+
 (* Implements the model-based under-approximation function MBU (Def. 4),
    returned as formulas U for OptiQSMA (Alg. 4, line 10). *)
 
@@ -18,7 +25,7 @@ let build_table smodel oldvar newvar =
   let tbl = HTerms.create (List.length newvar * 10) in
   (* treat_new var: record the value of a variable to eliminate as a table key. *)
   let treat_new var =
-    let value = SModel.get_value_as_term smodel var |> Option.get_exn_or "no term value" in
+    let value = get_value_as_term_exn smodel var in
     match HTerms.find_opt tbl value with
     | Some _ -> ()
     | None   -> HTerms.add tbl value []
@@ -63,7 +70,7 @@ let generalize_model smodel ~true_of_model ~rigid_vars ~newvars =
   let rec aux1 list : subst CLL.t = match list with
     | []              -> [] |> WithEpsilons.return |> CLL.return
     | var::other_vars -> (* var is a variable to eliminate *)
-      let value = SModel.get_value_as_term smodel var |> Option.get_exn_or "no term value" in (* its value in the model *)
+      let value = get_value_as_term_exn smodel var in (* its value in the model *)
       let terms = HTerms.find tbl value in (* list of rigid variables that have that value *)
       let value =
         match Term.reveal value with
@@ -134,6 +141,12 @@ let generalize_model ~logic smodel ~true_of_model ~rigid_vars ~newvars
        generalize_model smodel
          ~true_of_model:(WithEpsilons.return true_of_model) ~rigid_vars ~newvars
      in
+     let optional_substitution () =
+       lazy (
+         try Lazy.force (substitution ()) with
+         | NoTermValue _ -> `Nil
+       )
+     in
      begin
        try
          (* Yices projection performs its own arithmetic-construct preprocessing. *)
@@ -146,7 +159,7 @@ let generalize_model ~logic smodel ~true_of_model ~rigid_vars ~newvars
               SModel.generalize_model smodel true_of_model newvars `YICES_GEN_BY_PROJ
          in
          let projection = Term.andN projection |> WithEpsilons.return in
-         lazy (`Cons ((projection, 0), substitution ()))
+         lazy (`Cons ((projection, 0), optional_substitution ()))
        with _ ->
          substitution ()
      end
