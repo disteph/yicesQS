@@ -113,6 +113,11 @@ let param_from_seed i logic mode =
 
 let is_qf_bv_logic = String.equal "QF_BV"
 
+let term_hashset terms =
+  let tbl = Types.HTerms.create (List.length terms) in
+  List.iter (fun t -> Types.HTerms.replace tbl t ()) terms;
+  tbl
+
 (* solve ?compute_over state level smodel support:
    - compute_over: if true, compute a model interpolant on UNSAT
    - state: solver state (contexts, logic, counters)
@@ -220,14 +225,45 @@ and treat_sat state level smodel support =
     | Empty -> false
     | S _   -> true
   in
+  (* Support is cached by level id only because this traversal currently keeps
+     the same candidate model throughout. If the model-update path below is
+     re-enabled, this cache must be keyed by the current model too or cleared
+     when aux receives an updated model. *)
+  let support_cache = Stdlib.Hashtbl.create 16 in
+  let relevant_set owner =
+    let id = Level.(owner.id) in
+    match Stdlib.Hashtbl.find_opt support_cache id with
+    | Some set -> set
+    | None ->
+      let set =
+        try
+          Some (SModel.model_term_support smodel Level.(owner.local_formula) |> term_hashset)
+        with exn ->
+          print "solve" 2
+            "@[<2>Could not compute model support for level %i (%s); treating all forall proxies as relevant@]@,"
+            id (Printexc.to_string exn);
+          None
+      in
+      Stdlib.Hashtbl.add support_cache id set;
+      set
+  in
+  let is_relevant owner proxy =
+    match relevant_set owner with
+    | None -> true
+    | Some set -> Types.HTerms.mem set proxy
+  in
+  let with_owner owner foralls =
+    Seq.map (fun forall -> owner, forall) foralls
+  in
   (* Now we look at each forall formula that we have to satisfy, one by one *)
   (* aux smodel cumulated_support reasons foralls:
      - smodel: current candidate model
      - cumulated_support: terms fixed so far (incl. triggers)
      - reasons: accumulated reasons why foralls are satisfied
      - foralls: remaining forall opponents to check
-     Traverses the current level's forall opponents (Def. 1/2) and
-     mimics FAN/NAN filtering (Defs. 9/10). *)
+     Traverses forall opponents (Def. 1/2) and mimics FAN/NAN filtering
+     (Defs. 9/10). Each queued forall carries the level that owns its proxy,
+     so model-support relevance is computed from the owner's local formula. *)
   let rec aux smodel cumulated_support reasons foralls =
     match foralls() with
 
@@ -278,9 +314,21 @@ and treat_sat state level smodel support =
        else
          Some[]
 
-    (* Here we have a forall formula o that is false in the model;
+    (* If owner.local_formula's value in the model does not depend on o.name,
+       then this forall cannot affect validation of the current model. The
+       final explanation below still uses level.ground, which includes the
+       look-ahead constraints. Thus, if a skipped proxy is false, generated
+       under-approximations still retain the child witness obligation encoded
+       by name || SubGame.ground. *)
+    | Seq.Cons((owner, o), opponents) when not (is_relevant owner Level.(o.name)) ->
+      print "solve" 2 "@[<2>Skipping irrelevant forall proxy %a at level %i@]@,"
+        Term.pp Level.(o.name)
+        Level.(owner.id);
+      aux smodel cumulated_support reasons opponents
+
+    (* Here we have a relevant forall formula o that is false in the model;
        the reason why we don't have to look at it is that o is false in the model. *)
-    | Seq.Cons(o, opponents) when not (SModel.formula_true_in_model smodel Level.(o.name)) ->
+    | Seq.Cons((_, o), opponents) when not (SModel.formula_true_in_model smodel Level.(o.name)) ->
       print "solve" 4 "@[Level %i does not need to be looked at as %a is false@]@,"
         o.sublevel.id
         Term.pp o.name;
@@ -290,11 +338,11 @@ and treat_sat state level smodel support =
       aux smodel
         (o.name::cumulated_support)
         (Term.not1 o.name::reasons)
-        (Seq.append o.sublevel.foralls opponents)
+        (Seq.append (with_owner o.sublevel o.sublevel.foralls) opponents)
 
     (* Here we have a forall formula o that is true in the model;
        we have to make a recursive call to play the corresponding sub-game *)
-    | Seq.Cons(o, opponents) ->
+    | Seq.Cons((_, o), opponents) ->
       print "solve" 4 "@[Level %i needs to be looked at as %a is true@]@,"
         o.sublevel.id
         Term.pp o.name;
@@ -399,7 +447,7 @@ and treat_sat state level smodel support =
     | S{ trigger; _ } -> [trigger]
     | Empty -> [] (* otherwise we just keep those values *)
   in
-  aux smodel cumulated_support [] level.foralls
+  aux smodel cumulated_support [] (with_owner level level.foralls)
 
 [%%if debug_mode]
 (* return state answer expected:

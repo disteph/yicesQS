@@ -4,6 +4,7 @@ open Ext
 
 type t = {
     id : int;
+    local_formula : Term.t; (* Local formula with forall subformulas replaced by proxies. *)
     ground  : Term.t;      (* Look-ahead formula LF(n) (Def. 8). *)
     rigid   : Term.t list; (* Rigid(n) variables (Def. 1/3), fixed by ancestors. *)
     newvars : Term.t list; (* Local variables Var(n) \ Rigid(n) (Def. 1/3). *)

@@ -1,4 +1,4 @@
-.PHONY: default build install install-deps opam-pins uninstall test run-test run-bv-delegate-test run-wide-projection-test run-regressed-test run-regressed-wide-projection-test run-all-tests NRA LRA BV oldBV clean
+.PHONY: default build install install-deps opam-pins uninstall test run-test run-bv-delegate-test run-wide-projection-test run-model-support-relevance-debug-test run-regressed-test run-regressed-wide-projection-test run-all-tests NRA LRA BV oldBV clean
 
 export OCAMLRUNPARAM = b
 
@@ -73,6 +73,20 @@ run-bv-delegate-test: build
 
 run-wide-projection-test: build
 	time $(RUN_WIDE_PROJECTION) $(REGRESS_SMT2)
+
+run-model-support-relevance-debug-test:
+	@status=0; output=""; \
+	dune build --profile debug || status=$$?; \
+	if [ $$status -eq 0 ]; then \
+		output="$$( $(RUN_WITH_LIBPATH) timeout 5 ./main.exe -trace solve 2 regress/model-support-forall-relevance/irrelevant-or.smt2 2>&1 )" || status=$$?; \
+	fi; \
+	dune build $(DUNE_PROFILE_FLAG) >/dev/null || true; \
+	printf '%s\n' "$$output"; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
+	if ! printf '%s\n' "$$output" | grep -q "Skipping irrelevant forall proxy"; then \
+		echo "model-support relevance pruning did not fire"; \
+		exit 1; \
+	fi
 
 run-regressed-test: build
 	time $(RUN_REGRESSED_EXE) $(REGRESSED_SMT2)

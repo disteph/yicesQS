@@ -169,15 +169,16 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
                 existentials = Seq.nil;
                 universals   = Seq.nil; }
   in
-  let ground, { newvars; foralls; existentials; universals } = aux body state in
+  let local_formula, { newvars; foralls; existentials; universals } = aux body state in
   (module struct
      let top_level =
        Level.{id;
-              ground = Term.(ground &&& andN (Seq.to_list existentials));
+              local_formula;
+              ground = Term.(local_formula &&& andN (Seq.to_list existentials));
               rigid;
               newvars;
               foralls = Seq.of_list foralls }
-     let ground = ground
+     let ground = local_formula
      let existentials = existentials
      let universals = universals
    end)

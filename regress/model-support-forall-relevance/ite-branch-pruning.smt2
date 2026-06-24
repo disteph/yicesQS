@@ -1,0 +1,10 @@
+(set-info :status sat)
+(set-logic BV)
+(declare-const c (_ BitVec 1))
+(declare-const a (_ BitVec 8))
+(assert
+  (ite (= c #b0)
+       (= a (_ bv0 8))
+       (forall ((x (_ BitVec 8)))
+         (= x a))))
+(check-sat)

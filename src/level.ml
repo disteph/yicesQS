@@ -5,6 +5,7 @@ open Utils
 
 type t = { (* See comments in mli for Def. 1/2/8 references. *)
     id : int;
+    local_formula : Term.t;
     ground  : Term.t;
     rigid   : Term.t list;
     newvars : Term.t list;
@@ -18,7 +19,7 @@ and forall = {
   }
 
 
-let rec pp fmt {id; rigid; newvars; foralls; ground = _}
+let rec pp fmt {id; rigid; newvars; foralls; ground = _; local_formula = _}
   = Format.fprintf fmt "@[<v>\
                         Level id: %i@,\
                         %i ancestors' variables: @[<hov>%a@]@,\
