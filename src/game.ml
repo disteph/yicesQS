@@ -183,5 +183,8 @@ let rec process config ~rigidintro ~rigid ~intro body : t =
      let universals = universals
    end)
 
+let process_level config ~rigid ~intro body : t =
+  process config ~rigidintro:(rigid @ intro) ~rigid ~intro body
+
 let process config ~global_vars body : t =
   process config ~rigidintro:global_vars ~rigid:[] ~intro:global_vars body

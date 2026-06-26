@@ -1,0 +1,11 @@
+(set-logic NIA)
+(assert
+  (forall ((p Int))
+    (exists ((x Int))
+      (and (<= p x)
+           (< x (+ p 2))
+           (forall ((q Int))
+             (exists ((y Int))
+               (and (<= (+ p q) y)
+                    (< y (+ p q 2)))))))))
+(check-sat)

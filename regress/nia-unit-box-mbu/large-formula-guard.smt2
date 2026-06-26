@@ -1,0 +1,11 @@
+(set-logic NIA)
+(assert
+  (forall ((p Int))
+    (exists ((x Int))
+      (let ((t (+ (* (* (+ x p) (+ x p)) (* (+ x 1) (+ x 1)))
+                  (* p p)
+                  1)))
+        (and (<= p x)
+             (< x (+ p 2))
+             (< 0 t))))))
+(check-sat)

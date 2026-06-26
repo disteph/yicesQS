@@ -151,11 +151,30 @@ let set_wide_projection budget =
   if budget < 0 then
     failwith "-wide-projection expects a non-negative integer budget";
   wide_projection := Some budget
+
+let set_nia_unit_box_max_elims n =
+  if n < 0 then
+    failwith "-nia-unit-box-max-elims expects a non-negative integer";
+  nia_unit_box_max_elims := n
+
+let set_nia_unit_box_max_nodes n =
+  if n < 0 then
+    failwith "-nia-unit-box-max-nodes expects a non-negative integer";
+  nia_unit_box_max_nodes := n
+
+let set_nia_unit_box_timeout t =
+  if t < 0 then
+    failwith "-nia-unit-box-timeout expects a non-negative number";
+  nia_unit_box_timeout := float_of_int t
   
 let options = [
   ("-under",          Int(fun u -> underapprox := u), "\t\tDesired number of underapproximations in SAT answers (default is 20)");
   ("-no_bv_invert",   Clear bv_invert, "\tDisables invertibility conditions for BV (default is false, i.e. invertibility conditions are computed)");
   ("-wide-projection", Int set_wide_projection, "N\tUse wide model projection with cube budget N (0 means unbounded)");
+  ("-no_nia_unit_box_mbu", Clear nia_unit_box_mbu, "\tDisables unit-box MBU attempts for NIA");
+  ("-nia-unit-box-max-elims", Int set_nia_unit_box_max_elims, "N\tMaximum integer eliminables for unit-box NIA MBU");
+  ("-nia-unit-box-max-nodes", Int set_nia_unit_box_max_nodes, "N\tMaximum formula nodes for unit-box NIA MBU");
+  ("-nia-unit-box-timeout", Int set_nia_unit_box_timeout, "S\tTimeout in seconds for each unit-box NIA MBU attempt");
   ("-auto_portfolio", Int(fun t -> timeout := Some(float_of_int t)) , "S\tTriggers sequential auto-portfolio anticipating timeout of S seconds");
   ("-mcsat",    Unit set_mcsat, "\t\tSets solver as MCSAT");
   ("-cdclT",    Unit set_cdclT_default, "\t\tSets solver as CDCL(T) with inequality assumptions");

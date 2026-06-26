@@ -15,3 +15,10 @@ val pp : t Format.printer
 exception CannotTreat of Term.t
 
 val process : Config.t -> global_vars:Term.t list -> Term.t -> t
+
+val process_level :
+  Config.t ->
+  rigid:Term.t list ->
+  intro:Term.t list ->
+  Term.t ->
+  t

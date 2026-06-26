@@ -5,8 +5,10 @@ module Support : sig
   type t =
     | Empty
     | S of { trigger : Term.t;
-             variables : Term.t list; } [@@deriving show]
+             variables : Term.t list; }
+    | Fixed of { variables : Term.t list; } [@@deriving show]
   val list : t -> Term.t list
+  val computes_under : t -> bool
 end
 
 (* Output for the next function.

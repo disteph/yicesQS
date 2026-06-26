@@ -31,12 +31,21 @@ module Support = struct
     | S of {
         trigger : Term.t;
         variables : Term.t list
+      }
+    | Fixed of {
+        variables : Term.t list
       } [@@deriving show]
 
   (* list t: flatten a support into the list of terms to keep fixed. *)
   let list = function
     | Empty -> []
     | S{ trigger; variables } -> trigger::variables
+    | Fixed{ variables } -> variables
+
+  let computes_under = function
+    | Empty -> false
+    | S _
+    | Fixed _ -> true
 end
 
 type answer =
@@ -102,6 +111,29 @@ let current_param = ref None
 let as_inequalities = ref false
 let cancel_flag = Atomic.make false
 
+open Eio.Std
+
+let run_with_timeout ~timeout_sec ~stop f =
+  Eio_main.run @@ fun env ->
+    let clock = Eio.Stdenv.clock env in
+    let domain_mgr = Eio.Stdenv.domain_mgr env in
+    let result_promise, resolve = Promise.create () in
+    Switch.run (fun sw ->
+      Fiber.fork ~sw (fun () ->
+        let result =
+          try Ok (Eio.Domain_manager.run domain_mgr f)
+          with Interrupted -> Error `Timeout
+        in
+        Promise.resolve resolve result);
+      match Eio.Time.with_timeout clock timeout_sec (fun () ->
+        Promise.await result_promise)
+      with
+      | Ok result -> Some result
+      | Error `Timeout ->
+          stop();
+          let _ = Promise.await result_promise in
+          None)
+
 let param_from_seed i logic mode =
   let p = Param.malloc () in
   Param.set p ~name:"random-seed" ~value:(string_of_int i);
@@ -140,10 +172,11 @@ let rec solve ?(compute_over=true) state level smodel support : answer*SolverSta
     let status =
       match support with
       | Empty -> print "solve" 0 ".%i%!" level.id; Context.check ~param:(Option.get_exn_or "No parameter" !current_param) context
-      | S _   -> print "solve" 0 ".%i" level.id; Context.check context
-                                ~as_inequalities:!as_inequalities
-                                ~param:(Option.get_exn_or "No parameter" !current_param)
-                                ~smodel:(SModel.with_support (Support.list support) smodel)
+      | S _
+      | Fixed _ -> print "solve" 0 ".%i" level.id; Context.check context
+                                     ~as_inequalities:!as_inequalities
+                                     ~param:(Option.get_exn_or "No parameter" !current_param)
+                                     ~smodel:(SModel.with_support (Support.list support) smodel)
     in
     match status with
 
@@ -220,11 +253,7 @@ and treat_sat state level smodel support =
 
   (* Under-approximation (Def. 4) is only meaningful if we came with a
      non-empty support, i.e., at non-top levels. *)
-  let compute_under =
-    match support with
-    | Empty -> false
-    | S _   -> true
-  in
+  let compute_under = Support.computes_under support in
   (* Support is cached by level id only because this traversal currently keeps
      the same candidate model throughout. If the model-update path below is
      re-enabled, this cache must be keyed by the current model too or cleared
@@ -280,12 +309,24 @@ and treat_sat state level smodel support =
          let seq =
            print "solve" 1 "@,Sent for generalization:@, %a@," Term.pp true_of_model;
            (* print "solve" 0 "@,%a" (List.pp Term.pp) Level.(level.newvars); *)
-           QF_API.generalize_model
-             ~logic:S.logic
-             smodel
-             ~true_of_model
-             ~rigid_vars:Level.(level.rigid)
-             ~newvars:   Level.(level.newvars)
+           let fallback =
+             QF_API.generalize_model
+               ~logic:S.logic
+               smodel
+               ~true_of_model
+               ~rigid_vars:Level.(level.rigid)
+               ~newvars:   Level.(level.newvars)
+           in
+           let prepend_reasons reasons fallback =
+             List.fold_right
+               (fun reason tail ->
+                  lazy (`Cons ((WithEpsilons.return reason, 0), tail)))
+               reasons
+               fallback
+           in
+           match try_nia_unit_box_mbu state level smodel ~true_of_model with
+           | None -> fallback
+           | Some reasons -> prepend_reasons reasons fallback
          in
          (* extract chooses up to !underapprox projected reasons and collects epsilons. *)
          let rec extract
@@ -445,9 +486,154 @@ and treat_sat state level smodel support =
     (* If our own support is not empty, the first element is our own trigger:
        we keep it as well as the values passed to the recursive call but its own trigger *)
     | S{ trigger; _ } -> [trigger]
-    | Empty -> [] (* otherwise we just keep those values *)
+    | Empty
+    | Fixed _ -> [] (* otherwise we just keep those values *)
   in
   aux smodel cumulated_support [] (with_owner level level.foralls)
+
+and try_nia_unit_box_mbu state level smodel ~true_of_model =
+  let (module S:SolverState.T) = state in
+  match S.logic with
+  | `NIA ->
+    begin
+      try
+        match
+          Unit_box_mbu.build
+            smodel
+            ~true_of_model
+            ~rigid_vars:Level.(level.rigid)
+            ~newvars:Level.(level.newvars)
+        with
+        | Error reason ->
+          print "unit_box_mbu" 2 "@[<2>Skipping unit-box MBU: %a@]@,"
+            Unit_box_mbu.pp_skip_reason reason;
+          None
+        | Ok builder ->
+          let config =
+            Context.config S.context
+            |> Option.get_exn_or "unit-box MBU requires a context config"
+          in
+          match !current_param with
+          | None ->
+            print "unit_box_mbu" 2
+              "@[Skipping unit-box MBU: Yices parameter not initialized@]@,";
+            None
+          | Some param ->
+            let adapter_model () =
+              match builder.Unit_box_mbu.back_subst with
+              | [] -> Some smodel
+              | back_subst ->
+                let adapter = Context.malloc ~config () in
+                let equalities =
+                  List.map
+                    (fun (proxy, original) -> Term.Arith.arith_eq proxy original)
+                    back_subst
+                in
+                Context.assert_formulas adapter equalities;
+                match
+                  Context.check adapter
+                    ~param
+                    ~smodel:(SModel.with_support Level.(level.rigid) smodel)
+                with
+                | `STATUS_SAT ->
+                  Some (
+                    Context.get_model adapter
+                      ~keep_subst:true
+                      ~support:builder.rigid_vars)
+                | `STATUS_UNSAT
+                | `STATUS_ERROR
+                | `STATUS_INTERRUPTED ->
+                  None
+                | _ ->
+                  None
+            in
+            match adapter_model () with
+            | None ->
+              print "unit_box_mbu" 2 "@[Skipping unit-box MBU: adapter model failed@]@,";
+              None
+            | Some temp_smodel ->
+              let temp_state = ref None in
+              Fun.protect
+                ~finally:(fun () ->
+                  Option.iter SolverState.free !temp_state)
+                (fun () ->
+                   let game =
+                     Game.process_level
+                       config
+                       ~rigid:builder.rigid_vars
+                       ~intro:builder.intro_vars
+                       builder.body
+                   in
+                   let (module G : Game.T) = game in
+                   let state' = SolverState.create ~logic:"NRA" config game in
+                   temp_state := Some state';
+                   print "unit_box_mbu" 2
+                     "@[<2>Trying unit-box MBU with %i rigid(s) and %i box variable(s)@]@,"
+                     (List.length builder.rigid_vars)
+                     (List.length builder.intro_vars);
+                   print "unit_box_mbu" 3 "@[<v2>Unit-box body:@,%a@]@,"
+                     Term.pp builder.body;
+                   let solve_once () =
+                     let answer, _ =
+                       solve state'
+                         G.top_level
+                         temp_smodel
+                         (Support.Fixed { variables = builder.rigid_vars })
+                     in
+                     answer
+                   in
+                   let answer =
+                     if Float.( !nia_unit_box_timeout > 0. )
+                        && List.is_empty !events
+                     then
+                       run_with_timeout
+                         ~timeout_sec:!nia_unit_box_timeout
+                         ~stop:(fun () -> Option.iter SolverState.stop !temp_state)
+                         solve_once
+                     else
+                       Some (solve_once ())
+                   in
+                   match answer with
+                   | None ->
+                     print "unit_box_mbu" 2 "@[Unit-box MBU timed out@]@,";
+                     None
+                   | Some (Unsat _) ->
+                     print "unit_box_mbu" 2 "@[Unit-box MBU found no box@]@,";
+                     None
+                   | Some (Sat []) when List.is_empty builder.rigid_vars ->
+                     Some [Term.true0()]
+                   | Some (Sat []) ->
+                     None
+                   | Some (Sat reasons) ->
+                     let reasons =
+                       List.map (Term.subst_term builder.back_subst) reasons
+                     in
+                     let contains_temp reason =
+                       List.exists
+                         (fun var -> Term.is_free ~var reason)
+                         builder.temp_vars
+                     in
+                     if List.for_all
+                         (fun reason -> Term.is_bool reason && not (contains_temp reason))
+                         reasons
+                     then begin
+                       List.iter (check state level smodel Level.(level.rigid)) reasons;
+                       print "unit_box_mbu" 2
+                         "@[<2>Unit-box MBU succeeded with %i reason(s)@]@,"
+                         (List.length reasons);
+                       Some reasons
+                     end else begin
+                       print "unit_box_mbu" 2
+                         "@[Unit-box MBU discarded ill-scoped reason(s)@]@,";
+                       None
+                     end
+                )
+      with exn ->
+        print "unit_box_mbu" 2 "@[<2>Skipping unit-box MBU after exception: %s@]@,"
+          (Printexc.to_string exn);
+        None
+    end
+  | _ -> None
 
 [%%if debug_mode]
 (* return state answer expected:
@@ -537,29 +723,6 @@ let set_config ~logic mode =
   end;
   setmode cfg;
   cfg
-
-open Eio.Std
-
-let run_with_timeout ~timeout_sec ~stop f =
-  Eio_main.run @@ fun env ->
-    let clock = Eio.Stdenv.clock env in
-    let domain_mgr = Eio.Stdenv.domain_mgr env in
-    let result_promise, resolve = Promise.create () in
-    Switch.run (fun sw ->
-      Fiber.fork ~sw (fun () ->
-        let result =
-          try Ok (Eio.Domain_manager.run domain_mgr f)
-          with Interrupted -> Error `Timeout
-        in
-        Promise.resolve resolve result);
-      match Eio.Time.with_timeout clock timeout_sec (fun () ->
-        Promise.await result_promise)
-      with
-      | Ok result -> Some result
-      | Error `Timeout ->
-          stop();
-          let _ = Promise.await result_promise in
-          None)
 
 (* treat filename:
    - filename: SMT-LIB2 file to parse and solve
